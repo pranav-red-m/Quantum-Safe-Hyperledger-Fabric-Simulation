@@ -11,6 +11,17 @@ import (
 type SmartContract struct {
 	contractapi.Contract
 }
+// Defining Partial Block
+
+type PartialBlock struct {
+    BlockID      string  `json:"blockID"`
+    PreviousHash string  `json:"previousHash"`
+    Timestamp    string  `json:"timestamp"`
+    EventCount   int     `json:"eventCount"`
+    BlockHash    string  `json:"blockHash"`
+    Events       []Event `json:"events"`
+}
+
 
 // Event structure (THIS is your universal AI + IoT + PQC event format)
 type Event struct {
@@ -61,6 +72,50 @@ func (s *SmartContract) CreateEvent(ctx contractapi.TransactionContextInterface,
 
 	return nil
 }
+
+func (s *SmartContract) CreatePartialBlock(
+    ctx contractapi.TransactionContextInterface,
+    blockID string,
+	prevHash string,
+    timestamp string,
+    blockHash string,
+    eventsJSON string,
+) error{
+	var events []Event
+	err := json.Unmarshal([]byte(eventsJSON),&events,)
+	if err != nil {return err}
+
+	partialBlock := PartialBlock{
+		BlockID:      blockID,
+		PreviousHash: prevHash,
+		Timestamp:    timestamp,
+		EventCount:   len(events),
+		BlockHash:    blockHash,
+		Events:       events,
+	}
+
+	blockJSON, err :=json.Marshal(partialBlock)
+	if err != nil {return err}
+
+	return ctx.GetStub().PutState(blockID,blockJSON,)
+}
+
+// Read partial block
+func (s *SmartContract) ReadPartialBlock(
+	ctx contractapi.TransactionContextInterface,
+	blockID string,
+) (*PartialBlock,error){
+	blockJSON,err := ctx.GetStub().GetState(blockID)
+	if err != nil {return nil,err}
+	if blockJSON == nil {return nil,fmt.Errorf("Partialblock not found")}
+
+	var block PartialBlock
+
+	err = json.Unmarshal(blockJSON,&block,)
+	if err != nil {return nil,err}
+	return &block,nil
+}
+
 
 // ReadEvent retrieves a single event
 func (s *SmartContract) ReadEvent(ctx contractapi.TransactionContextInterface, eventID string) (*Event, error) {
