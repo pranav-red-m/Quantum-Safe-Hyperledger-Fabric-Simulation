@@ -36,3 +36,4 @@ Organizations:
             Endorsement:
                 Type: Signature
                 Rule: "OR('Org3MSP.peer')"
+w

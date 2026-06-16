@@ -10,6 +10,7 @@ import json
 BLOCK_SIZE = 10
 EVENT_BUFFER = []
 BLOCK_NUMBER = 1
+PREV_HASH = "GENESIS"
 
 
 #checkenv vars
@@ -42,7 +43,6 @@ ATTACK_TYPES = [
 ]
 #replace create event for receive event when we are able to link the create iot 
 def create_event(event_id):
-
     event_type = random.choice(ATTACK_TYPES)
     device_id = f"iot_{random.randint(1,10)}"
     timestamp = datetime.now().isoformat()
@@ -103,11 +103,12 @@ for i in range(1,101):
     event = create_event(f"E{i}")
     EVENT_BUFFER.append(event)
     if len(EVENT_BUFFER)==BLOCK_SIZE:
-        serialized = json.dumps(EVENT_BUFFER,sort_keys=True).encode()
+        serialized = json.dumps({"prevHash": PREV_HASH, "events": EVENT_BUFFER},sort_keys=True).encode()
         block_hash = hashlib.sha3_256(serialized).hexdigest() #This currently uses SHA3 as thats we have explored to use within the researcgh paper
         
         partial_block = {
             "blockID": f"PB{BLOCK_NUMBER}",
+            "prevHash": PREV_HASH,
             "timestamp": datetime.now().isoformat(),
             "eventCount": len(EVENT_BUFFER), #ideal world this should be 10, i dunno so im just gonna put len cause its already precompouted
             "blockHash": block_hash,
@@ -139,6 +140,7 @@ for i in range(1,101):
                 "Args": [
                     "CreatePartialBlock",
                     partial_block["blockID"],
+                    PREV_HASH,
                     partial_block["timestamp"],
                     partial_block["blockHash"],
                     events_json
@@ -150,6 +152,7 @@ for i in range(1,101):
 
         if result.returncode == 0:
             print(f"Successfully committed {partial_block['blockID']}")
+            PREV_HASH = partial_block["blockHash"]
         else:
             print("Failed to commit partial block")
             print(result.stderr)

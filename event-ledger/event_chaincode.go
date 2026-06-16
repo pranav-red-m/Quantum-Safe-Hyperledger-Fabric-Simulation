@@ -166,15 +166,8 @@ func (s *SmartContract) GetAllEvents(ctx contractapi.TransactionContextInterface
 
 	return events, nil
 }
-// MAIN function (Fabric entry point)
 func main() {
     chaincode, err := contractapi.NewChaincode(new(SmartContract))
-    if err != nil {
-        fmt.Printf("Error creating chaincode: %v", err)
-        return
-    }
-
-    if err := chaincode.Start(); err != nil {
-        fmt.Printf("Error starting chaincode: %v", err)
-    }
+    if err != nil {fmt.Printf("Error creating chaincode: %v", err)return}
+    if err := chaincode.Start(); err != nil {fmt.Printf("Error starting chaincode: %v", err)}
 }
