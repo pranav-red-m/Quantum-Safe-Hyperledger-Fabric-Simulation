@@ -1,0 +1,58 @@
+graph LR
+
+classDef subgraph_padding fill:none,stroke:none
+
+  subgraph orderer_example_com [Organization: Orderer<br>orderer.example.com]
+    subgraph orderer_example_com_padding [ ]
+      direction RL
+      subgraph ord_group_group1_orderer0_group1_orderer_example_com [Orderer Group: group1<br>BFT]
+        subgraph ord_group_group1_orderer0_group1_orderer_example_com_padding [ ]
+          direction RL
+          orderer0_group1_orderer_example_com[orderer0.group1.orderer.example.com]
+        end
+        class ord_group_group1_orderer0_group1_orderer_example_com_padding subgraph_padding
+      end
+      ca_orderer_example_com([ca.orderer.example.com<br>sqlite])
+    end
+    class orderer_example_com_padding subgraph_padding
+  end
+
+  subgraph org1_example_com [Organization: Org1<br>org1.example.com]
+    subgraph org1_example_com_padding [ ]
+      direction RL
+      ca_org1_example_com([ca.org1.example.com<br>sqlite])
+      peer0_org1_example_com[peer0.org1.example.com<br>LevelDb]
+    end
+    class org1_example_com_padding subgraph_padding
+  end
+
+  subgraph org2_example_com [Organization: Org2<br>org2.example.com]
+    subgraph org2_example_com_padding [ ]
+      direction RL
+      ca_org2_example_com([ca.org2.example.com<br>sqlite])
+      peer0_org2_example_com[peer0.org2.example.com<br>LevelDb]
+    end
+    class org2_example_com_padding subgraph_padding
+  end
+
+  subgraph org3_example_com [Organization: Org3<br>org3.example.com]
+    subgraph org3_example_com_padding [ ]
+      direction RL
+      ca_org3_example_com([ca.org3.example.com<br>sqlite])
+      peer0_org3_example_com[peer0.org3.example.com<br>LevelDb]
+    end
+    class org3_example_com_padding subgraph_padding
+  end
+
+  subgraph channel_my_channel1 [Channel: my-channel1]
+    subgraph channel_my_channel1_padding [ ]
+      chaincode_eventcc_my_channel1[[Chaincode: eventcc]]
+    end
+    class channel_my_channel1_padding subgraph_padding
+  end
+
+  %% Connections
+  peer0_org1_example_com --> channel_my_channel1
+  peer0_org2_example_com --> channel_my_channel1
+  peer0_org3_example_com --> channel_my_channel1
+  channel_my_channel1 --> ord_group_group1_orderer0_group1_orderer_example_com
