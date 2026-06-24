@@ -23,6 +23,7 @@ type Asset struct {
 	Size           int    `json:"Size"`
 }
 
+
 // CreateAsset issues a new asset to the world state with given details.
 func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, owner string, appraisedValue int) error {
 	existing, err := s.readState(ctx, id)

@@ -19,7 +19,7 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # --------------------------------------------------------------------------
-# CONFIG — change these if needed
+# CONFIG  change these if needed
 # --------------------------------------------------------------------------
 BASE_DIR="$HOME/thisbetterwork"
 FABRIC_VERSION="2.5.16"
@@ -29,7 +29,7 @@ CC_NAME="eventcc"
 CC_VERSION="1.0"
 
 # --------------------------------------------------------------------------
-# STEP 1 — Install Fabric if not already installed
+# STEP 1  Install Fabric if not already installed
 # --------------------------------------------------------------------------
 log "Checking Fabric installation..."
 
@@ -46,7 +46,7 @@ FABRIC_SAMPLES="$BASE_DIR/fabric-samples"
 TEST_NETWORK="$FABRIC_SAMPLES/test-network"
 
 # --------------------------------------------------------------------------
-# STEP 2 — Set PATH
+# STEP 2  Set PATH
 # --------------------------------------------------------------------------
 export PATH="$FABRIC_SAMPLES/bin:$PATH"
 export FABRIC_CFG_PATH="$FABRIC_SAMPLES/config/"
@@ -57,7 +57,7 @@ fi
 log "peer binary found: $(peer version | head -1)"
 
 # --------------------------------------------------------------------------
-# STEP 3 — Bring down any existing network
+# STEP 3  Bring down any existing network
 # --------------------------------------------------------------------------
 log "Tearing down any existing network..."
 cd "$TEST_NETWORK"
@@ -65,13 +65,13 @@ cd "$TEST_NETWORK"
 docker volume prune -f > /dev/null 2>&1 || true
 
 # --------------------------------------------------------------------------
-# STEP 4 — Start network and create channel
+# STEP 4  Start network and create channel
 # --------------------------------------------------------------------------
 log "Starting network and creating channel '$CHANNEL_NAME'..."
 ./network.sh up createChannel -c $CHANNEL_NAME
 
 # --------------------------------------------------------------------------
-# STEP 5 — Deploy chaincode on Org1 + Org2
+# STEP 5  Deploy chaincode on Org1 + Org2
 # --------------------------------------------------------------------------
 log "Deploying chaincode '$CC_NAME' on Org1 and Org2..."
 ./network.sh deployCC \
@@ -81,7 +81,7 @@ log "Deploying chaincode '$CC_NAME' on Org1 and Org2..."
   -c $CHANNEL_NAME
 
 # --------------------------------------------------------------------------
-# STEP 6 — Add Org3
+# STEP 6  Add Org3
 # --------------------------------------------------------------------------
 log "Adding Org3 to channel..."
 cd "$TEST_NETWORK/addOrg3"
@@ -90,7 +90,7 @@ cd "$TEST_NETWORK/addOrg3"
 cd "$TEST_NETWORK"
 
 # --------------------------------------------------------------------------
-# STEP 7 — Get current sequence number
+# STEP 7  Get current sequence number
 # --------------------------------------------------------------------------
 log "Getting current chaincode sequence..."
 
@@ -105,7 +105,7 @@ NEW_SEQ=$((CURRENT_SEQ + 1))
 log "Current sequence: $CURRENT_SEQ → New sequence: $NEW_SEQ"
 
 # --------------------------------------------------------------------------
-# STEP 8 — Install chaincode on Org3 and get package ID
+# STEP 8  Install chaincode on Org3 and get package ID
 # --------------------------------------------------------------------------
 log "Installing chaincode on Org3..."
 
@@ -128,7 +128,7 @@ for cc in data.get('installed_chaincodes', []):
 log "Org3 Package ID: $ORG3_PKG_ID"
 
 # --------------------------------------------------------------------------
-# STEP 9 — Get Org1 and Org2 package IDs
+# STEP 9  Get Org1 and Org2 package IDs
 # --------------------------------------------------------------------------
 export CORE_PEER_LOCALMSPID="Org1MSP"
 export CORE_PEER_TLS_ROOTCERT_FILE="${TEST_NETWORK}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
@@ -163,7 +163,7 @@ log "Org2 Package ID: $ORG2_PKG_ID"
 ORDERER_CA="${TEST_NETWORK}/organizations/ordererOrganizations/example.com/tlsca/tlsca.example.com-cert.pem"
 
 # --------------------------------------------------------------------------
-# STEP 10 — Approve for all 3 orgs
+# STEP 10  Approve for all 3 orgs
 # --------------------------------------------------------------------------
 log "Approving chaincode for Org1..."
 export CORE_PEER_LOCALMSPID="Org1MSP"
@@ -205,7 +205,7 @@ peer lifecycle chaincode approveformyorg \
   --package-id "$ORG3_PKG_ID"
 
 # --------------------------------------------------------------------------
-# STEP 11 — Check commit readiness
+# STEP 11  Check commit readiness
 # --------------------------------------------------------------------------
 log "Checking commit readiness..."
 peer lifecycle chaincode checkcommitreadiness \
@@ -213,7 +213,7 @@ peer lifecycle chaincode checkcommitreadiness \
   --version $CC_VERSION --sequence $NEW_SEQ --output json
 
 # --------------------------------------------------------------------------
-# STEP 12 — Commit chaincode
+# STEP 12  Commit chaincode
 # --------------------------------------------------------------------------
 log "Committing chaincode across all 3 orgs..."
 peer lifecycle chaincode commit \
@@ -229,7 +229,7 @@ peer lifecycle chaincode commit \
   --tlsRootCertFiles "${TEST_NETWORK}/organizations/peerOrganizations/org3.example.com/tlsca/tlsca.org3.example.com-cert.pem"
 
 # --------------------------------------------------------------------------
-# STEP 13 — Verify
+# STEP 13  Verify
 # --------------------------------------------------------------------------
 log "Verifying deployment..."
 peer lifecycle chaincode querycommitted --channelID $CHANNEL_NAME --name $CC_NAME --output json
