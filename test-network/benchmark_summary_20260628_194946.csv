@@ -1,0 +1,18 @@
+Test,Metric,Value
+Single Latency,mean,2088.09
+Single Latency,median,2082.92
+Single Latency,stdev,22.84
+Single Latency,min,2070.03
+Single Latency,max,2182.74
+Single Latency,failures,0
+Alert Latency,mean,2088.88
+Alert Latency,median,2083.29
+Alert Latency,stdev,17.27
+Alert Latency,min,2072.84
+Alert Latency,max,2136.78
+Load 10 devices,tps,33.75
+Load 10 devices,wall_time_ms,296.31
+Load 50 devices,tps,71.43
+Load 50 devices,wall_time_ms,700.01
+Load 100 devices,tps,81.04
+Load 100 devices,wall_time_ms,1233.97

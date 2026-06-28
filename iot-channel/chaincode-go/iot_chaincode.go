@@ -1,19 +1,20 @@
 package main
 
 import (
-"log"
+	"fmt"
 
-"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
-"github.com/hyperledger/fabric-samples/iot-channel/chaincode-go/chaincode"
+	"github.com/hyperledger/fabric-samples/iot-channel/chaincode-go/chaincode"
+	"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
 )
 
 func main() {
-assetChaincode, err := contractapi.NewChaincode(&chaincode.SmartContract{})
-if err != nil {
-log.Panicf("Error creating iot chaincode: %v", err)
-}
+	cc, err := contractapi.NewChaincode(&chaincode.SmartContract{})
+	if err != nil {
+		fmt.Printf("Error creating IoT chaincode: %v\n", err)
+		return
+	}
 
-if err := assetChaincode.Start(); err != nil {
-log.Panicf("Error starting iot chaincode: %v", err)
-}
+	if err := cc.Start(); err != nil {
+		fmt.Printf("Error starting IoT chaincode: %v\n", err)
+	}
 }

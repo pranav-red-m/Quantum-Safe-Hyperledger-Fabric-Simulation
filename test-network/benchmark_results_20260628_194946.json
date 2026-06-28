@@ -1,0 +1,67 @@
+{
+  "single_latency": {
+    "mean": 2088.09,
+    "median": 2082.92,
+    "stdev": 22.84,
+    "min": 2070.03,
+    "max": 2182.74,
+    "failures": 0
+  },
+  "query_latency": {
+    "get_record": {
+      "mean": 43.3,
+      "median": 42.59,
+      "stdev": 3.59,
+      "min": 40.03,
+      "max": 60.81
+    },
+    "get_all_records": {
+      "mean": 52.24,
+      "median": 51.37,
+      "stdev": 4.09,
+      "min": 48.47,
+      "max": 71.34
+    }
+  },
+  "load_test": {
+    "10": {
+      "wall_time_ms": 296.31,
+      "tps": 33.75,
+      "success_rate": "10/10"
+    },
+    "50": {
+      "wall_time_ms": 700.01,
+      "tps": 71.43,
+      "success_rate": "50/50"
+    },
+    "100": {
+      "wall_time_ms": 1233.97,
+      "tps": 81.04,
+      "success_rate": "100/100"
+    }
+  },
+  "batch_vs_single": {
+    "single": {
+      "mean": 20873.67,
+      "median": 20865.14,
+      "stdev": 72.85,
+      "min": 20781.71,
+      "max": 21003.11
+    },
+    "batch": {
+      "mean": 2085.97,
+      "median": 2085.33,
+      "stdev": 3.31,
+      "min": 2081.84,
+      "max": 2092.3
+    },
+    "speedup": 10.01
+  },
+  "alert_latency": {
+    "mean": 2088.88,
+    "median": 2083.29,
+    "stdev": 17.27,
+    "min": 2072.84,
+    "max": 2136.78
+  }
+}
