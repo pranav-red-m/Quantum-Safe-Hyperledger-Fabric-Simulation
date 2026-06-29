@@ -1,73 +1,208 @@
-[//]: # (SPDX-License-Identifier: CC-BY-4.0)
+- **3 Organisations** — Org1, Org2, Org3
+- **5 Peers** — Org1 (peer0:7051, peer1:8051), Org2 (peer0:9051, peer1:10051), Org3 (peer0:11051)
+- **1 Channel** — `mychannel`
+- **Endorsement Policy** — 2 of 3 organisations must endorse every transaction
+- **Chaincode** — `iotcc` (Go) deployed on all peers
 
-# Hyperledger Fabric Samples
+---
 
-You can use Fabric samples to get started working with Hyperledger Fabric, explore important Fabric features, and learn how to build applications that can interact with blockchain networks using the Fabric SDKs. To learn more about Hyperledger Fabric, visit the [Fabric documentation](https://hyperledger-fabric.readthedocs.io/en/latest).
+## Prerequisites
 
-Note that this branch contains samples for the latest Fabric release. For older Fabric versions, refer to the corresponding branches:
+- Docker Desktop running
+- WSL2 (Ubuntu) or Linux
+- Hyperledger Fabric binaries in `~/testingmultpeers/fabric-samples/bin`
+- Python 3 (for benchmarking and IDS bridge)
 
-- [release-2.2](https://github.com/hyperledger/fabric-samples/tree/release-2.2)
-- [release-1.4](https://github.com/hyperledger/fabric-samples/tree/release-1.4)
+---
 
-## Getting started with the Fabric samples
+## Quick Start
 
-To use the Fabric samples, you need to download the Fabric Docker images and the Fabric CLI tools. First, make sure that you have installed all of the [Fabric prerequisites](https://hyperledger-fabric.readthedocs.io/en/latest/prereqs.html). You can then follow the instructions to [Install the Fabric Samples, Binaries, and Docker Images](https://hyperledger-fabric.readthedocs.io/en/latest/install.html) in the Fabric documentation. In addition to downloading the Fabric images and tool binaries, the Fabric samples will also be cloned to your local machine.
+**1. Start the network:**
+```bash
+cd test-network
+./network.sh up createChannel -ca
+```
 
-## Test network
+**2. Add Org3:**
+```bash
+cd addOrg3
+./addOrg3.sh up -c mychannel
+cd ..
+```
 
-The [Fabric test network](test-network) in the samples repository provides a Docker Compose based test network with two
-Organization peers and an ordering service node. You can use it on your local machine to run the samples listed below.
-You can also use it to deploy and test your own Fabric chaincodes and applications. To get started, see
-the [test network tutorial](https://hyperledger-fabric.readthedocs.io/en/latest/test_network.html).
+**3. Install chaincode on all peers:**
+```bash
+./install_iotcc.sh
+```
 
-The [Kubernetes Test Network](test-network-k8s) sample builds upon the Compose network, constructing a Fabric
-network with peer, orderer, and CA infrastructure nodes running on Kubernetes.  In addition to providing a sample
-Kubernetes guide, the Kube test network can be used as a platform to author and debug _cloud ready_ Fabric Client
-applications on a development or CI workstation.
+**4. Deploy with 2/3 endorsement policy:**
+```bash
+./deploy_iotcc.sh <PACKAGE_ID>
+```
 
+Get your package ID from:
+```bash
+setGlobals 1
+peer lifecycle chaincode queryinstalled
+```
 
-## Asset transfer samples and tutorials
+**5. Verify deployment:**
+```bash
+peer lifecycle chaincode querycommitted --channelID mychannel --name iotcc
+```
 
-The asset transfer series provides a series of sample smart contracts and applications to demonstrate how to store and transfer assets using Hyperledger Fabric.
-Each sample and associated tutorial in the series demonstrates a different core capability in Hyperledger Fabric. The **Basic** sample provides an introduction on how
-to write smart contracts and how to interact with a Fabric network using the Fabric SDKs. The **Ledger queries**, **Private data**, and **State-based endorsement**
-samples demonstrate these additional capabilities. Finally, the **Secured agreement** sample demonstrates how to bring all the capabilities together to securely
-transfer an asset in a more realistic transfer scenario.
+---
 
-|  **Smart Contract** | **Description** | **Tutorial** | **Smart contract languages** | **Application languages** |
-| -----------|------------------------------|----------|---------|---------|
-| [Basic](asset-transfer-basic) | The Basic sample smart contract that allows you to create and transfer an asset by putting data on the ledger and retrieving it. This sample is recommended for new Fabric users. | [Writing your first application](https://hyperledger-fabric.readthedocs.io/en/latest/write_first_app.html) | Go, JavaScript, TypeScript, Java | Go, TypeScript, Java |
-| [Ledger queries](asset-transfer-ledger-queries) | The ledger queries sample demonstrates range queries and transaction updates using range queries (applicable for both LevelDB and CouchDB state databases), and how to deploy an index with your chaincode to support JSON queries (applicable for CouchDB state database only). | [Using CouchDB](https://hyperledger-fabric.readthedocs.io/en/latest/couchdb_tutorial.html) | Go, JavaScript | Java, JavaScript |
-| [Private data](asset-transfer-private-data) | This sample demonstrates the use of private data collections, how to manage private data collections with the chaincode lifecycle, and how the private data hash can be used to verify private data on the ledger. It also demonstrates how to control asset updates and transfers using client-based ownership and access control. | [Using Private Data](https://hyperledger-fabric.readthedocs.io/en/latest/private_data_tutorial.html) | Go, TypeScript, Java | TypeScript |
-| [State-Based Endorsement](asset-transfer-sbe) | This sample demonstrates how to override the chaincode-level endorsement policy to set endorsement policies at the key-level (data/asset level). | [Using State-based endorsement](https://github.com/hyperledger/fabric-samples/tree/main/asset-transfer-sbe) | Java, TypeScript | JavaScript |
-| [Secured agreement](asset-transfer-secured-agreement) | Smart contract that uses implicit private data collections, state-based endorsement, and organization-based ownership and access control to keep data private and securely transfer an asset with the consent of both the current owner and buyer. | [Secured asset transfer](https://hyperledger-fabric.readthedocs.io/en/latest/secured_asset_transfer/secured_private_asset_transfer_tutorial.html)  | Go | TypeScript |
-| [Events](asset-transfer-events) | The events sample demonstrates how smart contracts can emit events that are read by the applications interacting with the network. | [README](asset-transfer-events/README.md)  | Go, JavaScript, Java | Go, TypeScript, Java |
-| [Attribute-based access control](asset-transfer-abac) | Demonstrates the use of attribute and identity based access control using a simple asset transfer scenario | [README](asset-transfer-abac/README.md)  | Go | _None_ |
+## Environment Setup
 
-## Full stack asset transfer guide
+Always run before any peer command:
+```bash
+source ~/testingmultpeers/fabric-samples/test-network/scripts/envVar.sh
+export FABRIC_CFG_PATH=$HOME/testingmultpeers/fabric-samples/config
+export PATH=$HOME/testingmultpeers/fabric-samples/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
+```
 
-The [full stack asset transfer guide](full-stack-asset-transfer-guide#readme) workshop demonstrates how a generic asset transfer solution for Hyperledger Fabric can be developed and deployed. This covers chaincode development, client application development, and deployment to a production-like environment.
+Switch between peers:
+```bash
+setGlobals 1 && export CORE_PEER_ADDRESS=localhost:7051   # Org1 peer0
+setGlobals 1 && export CORE_PEER_ADDRESS=localhost:8051   # Org1 peer1
+setGlobals 2 && export CORE_PEER_ADDRESS=localhost:9051   # Org2 peer0
+setGlobals 2 && export CORE_PEER_ADDRESS=localhost:10051  # Org2 peer1
+setGlobals 3 && export CORE_PEER_ADDRESS=localhost:11051  # Org3 peer0
+```
 
-## Additional samples
+---
 
-Additional samples demonstrate various Fabric use cases and application patterns.
+## Chaincode — iotcc
 
-|  **Sample** | **Description** | **Documentation** |
-| -------------|------------------------------|------------------|
-| [Off chain data](off_chain_data) | Learn how to use block events to build an off-chain database for reporting and analytics. | [Peer channel-based event services](https://hyperledger-fabric.readthedocs.io/en/latest/peer_event_services.html) |
-| [Token SDK](token-sdk) | Sample REST API around the Hyperledger Labs [Token SDK](https://github.com/hyperledger-labs/fabric-token-sdk) for privacy friendly (zero knowledge proof) UTXO transactions. | [README](token-sdk/README.md) |
-| [Token ERC-20](token-erc-20) | Smart contract demonstrating how to create and transfer fungible tokens using an account-based model. | [README](token-erc-20/README.md) |
-| [Token UTXO](token-utxo) | Smart contract demonstrating how to create and transfer fungible tokens using a UTXO (unspent transaction output) model. | [README](token-utxo/README.md) |
-| [Token ERC-1155](token-erc-1155) | Smart contract demonstrating how to create and transfer multiple tokens (both fungible and non-fungible) using an account based model. | [README](token-erc-1155/README.md) |
-| [Token ERC-721](token-erc-721) | Smart contract demonstrating how to create and transfer non-fungible tokens using an account-based model. | [README](token-erc-721/README.md) |
-| [High throughput](high-throughput) | Learn how you can design your smart contract to avoid transaction collisions in high volume environments. | [README](high-throughput/README.md) |
-| [Simple Auction](auction-simple) | Run an auction where bids are kept private until the auction is closed, after which users can reveal their bid. | [README](auction-simple/README.md) |
-| [Dutch Auction](auction-dutch) | Run an auction in which multiple items of the same type can be sold to more than one buyer. This example also includes the ability to add an auditor organization. | [README](auction-dutch/README.md) |
+Located at `iot-channel/chaincode-go/chaincode/smartcontract.go`
 
+### Data Layer
+| Function | Description |
+|----------|-------------|
+| `SubmitRecord` | Submit a single IoT record — checks device is registered before writing |
+| `SubmitBatch` | Submit multiple IoT records in one transaction (edge node batching) |
+| `GetRecord` | Retrieve a single record by transaction ID |
+| `GetAllRecords` | Retrieve all records on the ledger |
+| `VerifyHash` | Verify a record's data hash has not been tampered with |
+| `GetRecordHistory` | Full immutable audit trail of every state change to a record |
 
-## License <a name="license"></a>
+### Access Control
+| Function | Description |
+|----------|-------------|
+| `RegisterDevice` | Register an IoT device on-chain — unregistered devices are rejected |
+| `DeactivateDevice` | Deactivate a malicious device — called by IDS when anomaly detected |
+| `GetDevice` | Query a registered device by ID |
+| `GetAllDevices` | List all registered devices |
 
-Hyperledger Project source code files are made available under the Apache
-License, Version 2.0 (Apache-2.0), located in the [LICENSE](LICENSE) file.
-Hyperledger Project documentation files are made available under the Creative
-Commons Attribution 4.0 International License (CC-BY-4.0), available at http://creativecommons.org/licenses/by/4.0/.
+### Security / IDS Integration
+| Function | Description |
+|----------|-------------|
+| `RaiseAlert` | IDS writes anomaly alert immutably on-chain, auto-flags the record |
+| `GetAlertsForDevice` | Query all alerts raised for a specific device |
+
+### Governance
+| Function | Description |
+|----------|-------------|
+| `UpdateRecordStatus` | Enforces state machine: `confirmed → validated → approved/flagged → resolved → archived` |
+| `ChallengeRecord` | Any org can dispute another org's record — permanently on-chain, cannot be deleted |
+| `ResolveChallenge` | Close a dispute with a resolution |
+| `GetChallengesForRecord` | Get all challenges raised against a specific record |
+| `GetAllChallenges` | Full audit trail of all disputes across all records |
+
+---
+
+## Scripts
+
+| Script | Usage | Description |
+|--------|-------|-------------|
+| `install_iotcc.sh` | `./install_iotcc.sh` | Packages and installs chaincode on all 5 peers |
+| `deploy_iotcc.sh` | `./deploy_iotcc.sh <PACKAGE_ID>` | Approves for all 3 orgs and commits with 2/3 endorsement policy |
+
+---
+
+## IDS Integration
+
+The AI-driven Isolation Forest IDS connects to the blockchain via `fabric_bridge.py`.
+
+Drop `fabric_bridge.py` next to your IDS Python code and import:
+
+```python
+from fabric_bridge import submit_record, submit_batch, raise_alert
+
+# Normal flow — edge node batches IoT records
+submit_batch([
+    {"txId": "TX001", "deviceId": "dev-001", "edgeCluster": "edge-1", "dataHash": "abc123", "status": "confirmed"},
+    {"txId": "TX002", "deviceId": "dev-002", "edgeCluster": "edge-1", "dataHash": "def456", "status": "confirmed"},
+])
+
+# IDS detects anomaly — raise alert on blockchain
+raise_alert(
+    device_id="dev-003",
+    tx_id="TX003",
+    severity="HIGH",
+    description=f"Isolation Forest anomaly score: 0.87",
+    flagged_by="edge-cluster-1"
+)
+```
+
+---
+
+## Benchmarking
+
+Run from `test-network` directory:
+
+```bash
+# Basic tests — single latency, query latency, concurrent load
+python3 benchmark.py
+
+# Full tests — includes batch, alerts, state machine, challenges, device registry, history
+python3 benchmark.py --full
+```
+
+### Benchmark Results Summary
+
+| Test | Result |
+|------|--------|
+| Single record latency (mean) | 2088.09 ms |
+| Query latency — GetRecord (mean) | 44.57 ms |
+| Query latency — GetAllRecords (mean) | 48.14 ms |
+| Throughput — 10 devices | 65.19 tx/s |
+| Throughput — 50 devices | 84.48 tx/s |
+| Throughput — 100 devices | 84.25 tx/s |
+| Batch vs single speedup (10 records) | 9.97x |
+| Alert write latency (mean) | 2093.64 ms |
+| State machine transitions | 10/10 ✅ |
+| Invalid transition rejection | ✅ Correctly rejected |
+| Cross-org challenge | 10/10 ✅ |
+| Unregistered device rejection | ✅ Correctly rejected |
+
+---
+
+## End-to-End Test
+
+Test the full flow — IoT data → edge → IDS → blockchain:
+
+```bash
+# 1. Register a device
+peer chaincode invoke ... -c '{"function":"RegisterDevice","Args":["dev-001","temperature-sensor","edge-1","Org1MSP"]}'
+
+# 2. Submit IoT data
+peer chaincode invoke ... -c '{"function":"SubmitRecord","Args":["TX001","dev-001","edge-1","abc123hash","confirmed"]}'
+
+# 3. IDS flags it — raise alert
+peer chaincode invoke ... -c '{"function":"RaiseAlert","Args":["ALERT001","TX001","dev-001","HIGH","Anomaly detected","edge-1"]}'
+
+# 4. Check record is now flagged
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetRecord","Args":["TX001"]}'
+
+# 5. Challenge from another org
+peer chaincode invoke ... -c '{"function":"ChallengeRecord","Args":["CH001","TX001","Reading inconsistent with cluster baseline"]}'
+
+# 6. View full history
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetRecordHistory","Args":["TX001"]}'
+```
+
+---
+
+## Project Structure
