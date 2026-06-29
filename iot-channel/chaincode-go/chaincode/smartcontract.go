@@ -20,6 +20,24 @@ type IoTRecord struct {
 	Status      string `json:"status"`
 }
 
+type RecordChallenge struct {
+	ChallengeID    string `json:"challengeId"`
+	TxID           string `json:"txId"`
+	ChallengingOrg string `json:"challengingOrg"`
+	Reason         string `json:"reason"`
+	Status         string `json:"status"`
+	Timestamp      string `json:"timestamp"`
+	Resolution     string `json:"resolution"`
+}
+
+type Device struct {
+	DeviceID    string `json:"deviceId"`
+	DeviceType  string `json:"deviceType"`
+	EdgeCluster string `json:"edgeCluster"`
+	OrgMSP      string `json:"orgMsp"`
+	Active      bool   `json:"active"`
+}
+
 func (s *SmartContract) SubmitRecord(
 	ctx contractapi.TransactionContextInterface,
 	txID string,
@@ -42,6 +60,24 @@ func (s *SmartContract) SubmitRecord(
 		return fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 	timestamp := fmt.Sprintf("%d", txTimestamp.Seconds)
+
+	deviceKey := "DEVICE_" + deviceID
+	deviceJSON, err := ctx.GetStub().GetState(deviceKey)
+	if err != nil {
+		return fmt.Errorf("failed to check device registration: %v", err)
+	}
+	if deviceJSON == nil {
+		return fmt.Errorf("device %s is not registered on the blockchain", deviceID)
+	}
+
+	var device Device
+	err = json.Unmarshal(deviceJSON, &device)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal device: %v", err)
+	}
+	if !device.Active {
+		return fmt.Errorf("device %s has been deactivated and cannot submit records", deviceID)
+	}
 
 	record := IoTRecord{
 		TxID:        txID,
@@ -304,4 +340,390 @@ func (s *SmartContract) GetAlertsForDevice(
 		}
 	}
 	return alerts, nil
+}
+
+func (s *SmartContract) ChallengeRecord(
+	ctx contractapi.TransactionContextInterface,
+	challengeID string,
+	txID string,
+	reason string,
+) error {
+
+	// Check the record being challenged actually exists
+	recordJSON, err := ctx.GetStub().GetState(txID)
+	if err != nil {
+		return fmt.Errorf("failed to read record: %v", err)
+	}
+	if recordJSON == nil {
+		return fmt.Errorf("record %s does not exist", txID)
+	}
+
+	// Check challenge doesn't already exist
+	key := "CHALLENGE_" + challengeID
+	existing, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return fmt.Errorf("failed to read ledger: %v", err)
+	}
+	if existing != nil {
+		return fmt.Errorf("challenge %s already exists", challengeID)
+	}
+
+	// Get the MSP ID of the org raising the challenge
+	clientMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get client MSP: %v", err)
+	}
+
+	txTime, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get timestamp: %v", err)
+	}
+	timestamp := fmt.Sprintf("%d", txTime.Seconds)
+
+	challenge := RecordChallenge{
+		ChallengeID:    challengeID,
+		TxID:           txID,
+		ChallengingOrg: clientMSP,
+		Reason:         reason,
+		Status:         "open",
+		Timestamp:      timestamp,
+		Resolution:     "",
+	}
+
+	challengeJSON, err := json.Marshal(challenge)
+	if err != nil {
+		return fmt.Errorf("failed to marshal challenge: %v", err)
+	}
+
+	// Emit event so all orgs are notified
+	ctx.GetStub().SetEvent("RecordChallenged", challengeJSON)
+
+	return ctx.GetStub().PutState(key, challengeJSON)
+}
+
+// ResolveChallenge closes a challenge with a resolution
+func (s *SmartContract) ResolveChallenge(
+	ctx contractapi.TransactionContextInterface,
+	challengeID string,
+	resolution string,
+) error {
+
+	key := "CHALLENGE_" + challengeID
+	challengeJSON, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return fmt.Errorf("failed to read challenge: %v", err)
+	}
+	if challengeJSON == nil {
+		return fmt.Errorf("challenge %s does not exist", challengeID)
+	}
+
+	var challenge RecordChallenge
+	err = json.Unmarshal(challengeJSON, &challenge)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal challenge: %v", err)
+	}
+
+	if challenge.Status == "resolved" {
+		return fmt.Errorf("challenge %s is already resolved", challengeID)
+	}
+
+	challenge.Status = "resolved"
+	challenge.Resolution = resolution
+
+	updated, err := json.Marshal(challenge)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated challenge: %v", err)
+	}
+
+	return ctx.GetStub().PutState(key, updated)
+}
+
+// GetChallengesForRecord returns all challenges raised against a record
+func (s *SmartContract) GetChallengesForRecord(
+	ctx contractapi.TransactionContextInterface,
+	txID string,
+) ([]*RecordChallenge, error) {
+
+	iterator, err := ctx.GetStub().GetStateByRange("CHALLENGE_", "CHALLENGE_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get challenges: %v", err)
+	}
+	defer iterator.Close()
+
+	var challenges []*RecordChallenge
+
+	for iterator.HasNext() {
+		result, err := iterator.Next()
+		if err != nil {
+			return nil, err
+		}
+		var challenge RecordChallenge
+		if err := json.Unmarshal(result.Value, &challenge); err == nil {
+			if challenge.TxID == txID {
+				challenges = append(challenges, &challenge)
+			}
+		}
+	}
+
+	return challenges, nil
+}
+
+// GetAllChallenges returns every challenge across all records
+func (s *SmartContract) GetAllChallenges(
+	ctx contractapi.TransactionContextInterface,
+) ([]*RecordChallenge, error) {
+
+	iterator, err := ctx.GetStub().GetStateByRange("CHALLENGE_", "CHALLENGE_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get challenges: %v", err)
+	}
+	defer iterator.Close()
+
+	var challenges []*RecordChallenge
+
+	for iterator.HasNext() {
+		result, err := iterator.Next()
+		if err != nil {
+			return nil, err
+		}
+		var challenge RecordChallenge
+		if err := json.Unmarshal(result.Value, &challenge); err == nil {
+			challenges = append(challenges, &challenge)
+		}
+	}
+
+	return challenges, nil
+}
+
+// UpdateRecordStatus enforces valid state transitions on IoT records
+func (s *SmartContract) UpdateRecordStatus(
+	ctx contractapi.TransactionContextInterface,
+	txID string,
+	newStatus string,
+) error {
+
+	// Valid state transitions
+	validTransitions := map[string][]string{
+		"confirmed":  {"validated"},
+		"submitted":  {"validated"},
+		"validated":  {"approved", "flagged"},
+		"approved":   {"archived"},
+		"flagged":    {"resolved"},
+		"resolved":   {"archived"},
+	}
+
+	// Read existing record
+	recordJSON, err := ctx.GetStub().GetState(txID)
+	if err != nil {
+		return fmt.Errorf("failed to read record %s: %v", txID, err)
+	}
+	if recordJSON == nil {
+		return fmt.Errorf("record %s does not exist", txID)
+	}
+
+	var record IoTRecord
+	err = json.Unmarshal(recordJSON, &record)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal record: %v", err)
+	}
+
+	// Check if transition is valid
+	allowedStatuses, exists := validTransitions[record.Status]
+	if !exists {
+		return fmt.Errorf("record %s has unknown status: %s", txID, record.Status)
+	}
+
+	valid := false
+	for _, allowed := range allowedStatuses {
+		if allowed == newStatus {
+			valid = true
+			break
+		}
+	}
+
+	if !valid {
+		return fmt.Errorf(
+			"invalid transition for record %s: %s → %s (allowed: %v)",
+			txID, record.Status, newStatus, allowedStatuses,
+		)
+	}
+
+	// Apply the new status
+	record.Status = newStatus
+
+	updated, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated record: %v", err)
+	}
+
+	// Emit event so all orgs are notified of status change
+	ctx.GetStub().SetEvent("RecordStatusUpdated", updated)
+
+	return ctx.GetStub().PutState(txID, updated)
+}
+
+// RegisterDevice registers an IoT device on the blockchain
+func (s *SmartContract) RegisterDevice(
+	ctx contractapi.TransactionContextInterface,
+	deviceID string,
+	deviceType string,
+	edgeCluster string,
+	orgMSP string,
+) error {
+
+	key := "DEVICE_" + deviceID
+	existing, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return fmt.Errorf("failed to read ledger: %v", err)
+	}
+	if existing != nil {
+		return fmt.Errorf("device %s is already registered", deviceID)
+	}
+
+	device := Device{
+		DeviceID:    deviceID,
+		DeviceType:  deviceType,
+		EdgeCluster: edgeCluster,
+		OrgMSP:      orgMSP,
+		Active:      true,
+	}
+
+	deviceJSON, err := json.Marshal(device)
+	if err != nil {
+		return fmt.Errorf("failed to marshal device: %v", err)
+	}
+
+	ctx.GetStub().SetEvent("DeviceRegistered", deviceJSON)
+	return ctx.GetStub().PutState(key, deviceJSON)
+}
+
+// DeactivateDevice marks a device as inactive — called by IDS when malicious
+func (s *SmartContract) DeactivateDevice(
+	ctx contractapi.TransactionContextInterface,
+	deviceID string,
+	reason string,
+) error {
+
+	key := "DEVICE_" + deviceID
+	deviceJSON, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return fmt.Errorf("failed to read device: %v", err)
+	}
+	if deviceJSON == nil {
+		return fmt.Errorf("device %s is not registered", deviceID)
+	}
+
+	var device Device
+	err = json.Unmarshal(deviceJSON, &device)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal device: %v", err)
+	}
+
+	device.Active = false
+
+	updated, err := json.Marshal(device)
+	if err != nil {
+		return fmt.Errorf("failed to marshal device: %v", err)
+	}
+
+	ctx.GetStub().SetEvent("DeviceDeactivated", updated)
+	return ctx.GetStub().PutState(key, updated)
+}
+
+// GetDevice returns a registered device by ID
+func (s *SmartContract) GetDevice(
+	ctx contractapi.TransactionContextInterface,
+	deviceID string,
+) (*Device, error) {
+
+	key := "DEVICE_" + deviceID
+	deviceJSON, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read device: %v", err)
+	}
+	if deviceJSON == nil {
+		return nil, fmt.Errorf("device %s is not registered", deviceID)
+	}
+
+	var device Device
+	err = json.Unmarshal(deviceJSON, &device)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal device: %v", err)
+	}
+
+	return &device, nil
+}
+
+// GetAllDevices returns all registered devices
+func (s *SmartContract) GetAllDevices(
+	ctx contractapi.TransactionContextInterface,
+) ([]*Device, error) {
+
+	iterator, err := ctx.GetStub().GetStateByRange("DEVICE_", "DEVICE_~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get devices: %v", err)
+	}
+	defer iterator.Close()
+
+	var devices []*Device
+
+	for iterator.HasNext() {
+		result, err := iterator.Next()
+		if err != nil {
+			return nil, err
+		}
+		var device Device
+		if err := json.Unmarshal(result.Value, &device); err == nil {
+			devices = append(devices, &device)
+		}
+	}
+
+	return devices, nil
+}
+
+func (s *SmartContract) GetRecordHistory(
+    ctx contractapi.TransactionContextInterface,
+    txID string,
+) (string, error) {
+
+    iterator, err := ctx.GetStub().GetHistoryForKey(txID)
+    if err != nil {
+        return "", fmt.Errorf("failed to get history: %v", err)
+    }
+    defer iterator.Close()
+
+    type HistoryEntry struct {
+        TxID      string    `json:"txId"`
+        Value     IoTRecord `json:"value"`
+        Timestamp string    `json:"timestamp"`
+        IsDelete  bool      `json:"isDelete"`
+    }
+
+    var history []HistoryEntry
+
+    for iterator.HasNext() {
+        result, err := iterator.Next()
+        if err != nil {
+            return "", err
+        }
+
+        var record IoTRecord
+        if !result.IsDelete {
+            json.Unmarshal(result.Value, &record)
+        }
+
+        history = append(history, HistoryEntry{
+            TxID:      result.TxId,
+            Value:     record,
+            Timestamp: fmt.Sprintf("%d", result.Timestamp.Seconds),
+            IsDelete:  result.IsDelete,
+        })
+    }
+
+    historyJSON, err := json.Marshal(history)
+    if err != nil {
+        return "", err
+    }
+
+    return string(historyJSON), nil
 }

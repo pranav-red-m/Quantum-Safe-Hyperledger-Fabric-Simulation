@@ -1,0 +1,13 @@
+Test,Metric,Value
+Single Latency,mean,2088.18
+Single Latency,median,2084.59
+Single Latency,stdev,15.29
+Single Latency,min,2079.31
+Single Latency,max,2162.63
+Single Latency,failures,0
+Load 10 devices,tps,53.94
+Load 10 devices,wall_time_ms,185.39
+Load 50 devices,tps,79.09
+Load 50 devices,wall_time_ms,632.17
+Load 100 devices,tps,82.43
+Load 100 devices,wall_time_ms,1213.21

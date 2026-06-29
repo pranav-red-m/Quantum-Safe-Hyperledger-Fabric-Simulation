@@ -1,0 +1,107 @@
+{
+  "single_latency": {
+    "mean": 2088.09,
+    "median": 2084.4,
+    "stdev": 11.25,
+    "min": 2078.61,
+    "max": 2123.44,
+    "failures": 0
+  },
+  "query_latency": {
+    "get_record": {
+      "mean": 44.57,
+      "median": 42.24,
+      "stdev": 10.61,
+      "min": 39.92,
+      "max": 99.84
+    },
+    "get_all_records": {
+      "mean": 48.14,
+      "median": 45.52,
+      "stdev": 8.44,
+      "min": 43.12,
+      "max": 89.1
+    },
+    "get_device": {
+      "mean": 45.43,
+      "median": 41.69,
+      "stdev": 13.4,
+      "min": 40.0,
+      "max": 111.29
+    }
+  },
+  "load_test": {
+    "10": {
+      "wall_time_ms": 153.4,
+      "tps": 65.19,
+      "success_rate": "10/10"
+    },
+    "50": {
+      "wall_time_ms": 591.84,
+      "tps": 84.48,
+      "success_rate": "50/50"
+    },
+    "100": {
+      "wall_time_ms": 1186.91,
+      "tps": 84.25,
+      "success_rate": "100/100"
+    }
+  },
+  "batch_vs_single": {
+    "single": {
+      "mean": 20865.37,
+      "median": 20854.9,
+      "stdev": 56.07,
+      "min": 20803.52,
+      "max": 20958.09
+    },
+    "batch": {
+      "mean": 2093.18,
+      "median": 2087.96,
+      "stdev": 16.16,
+      "min": 2079.09,
+      "max": 2130.71
+    },
+    "speedup": 9.97
+  },
+  "alert_latency": {
+    "mean": 2093.64,
+    "median": 2081.87,
+    "stdev": 48.95,
+    "min": 2073.08,
+    "max": 2296.67
+  },
+  "state_machine": {
+    "mean": 2105.81,
+    "median": 2084.01,
+    "stdev": 62.31,
+    "min": 2074.99,
+    "max": 2280.74,
+    "failures": 0
+  },
+  "challenge_record": {
+    "mean": 2086.36,
+    "median": 2081.4,
+    "stdev": 11.92,
+    "min": 2076.2,
+    "max": 2110.6,
+    "failures": 0
+  },
+  "device_registry": {
+    "register": {
+      "mean": 2082.47,
+      "median": 2080.03,
+      "stdev": 13.28,
+      "min": 2073.13,
+      "max": 2136.45
+    },
+    "query": {
+      "mean": 47.31,
+      "median": 44.19,
+      "stdev": 11.88,
+      "min": 42.68,
+      "max": 97.26
+    },
+    "failures": 0
+  }
+}

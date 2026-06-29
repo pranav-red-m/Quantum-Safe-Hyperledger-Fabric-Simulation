@@ -1,0 +1,50 @@
+{
+  "single_latency": {
+    "mean": 2088.18,
+    "median": 2084.59,
+    "stdev": 15.29,
+    "min": 2079.31,
+    "max": 2162.63,
+    "failures": 0
+  },
+  "query_latency": {
+    "get_record": {
+      "mean": 45.81,
+      "median": 41.96,
+      "stdev": 17.42,
+      "min": 40.28,
+      "max": 137.39
+    },
+    "get_all_records": {
+      "mean": 46.67,
+      "median": 43.35,
+      "stdev": 18.55,
+      "min": 39.89,
+      "max": 144.15
+    },
+    "get_device": {
+      "mean": 45.45,
+      "median": 42.63,
+      "stdev": 13.35,
+      "min": 40.18,
+      "max": 114.71
+    }
+  },
+  "load_test": {
+    "10": {
+      "wall_time_ms": 185.39,
+      "tps": 53.94,
+      "success_rate": "10/10"
+    },
+    "50": {
+      "wall_time_ms": 632.17,
+      "tps": 79.09,
+      "success_rate": "50/50"
+    },
+    "100": {
+      "wall_time_ms": 1213.21,
+      "tps": 82.43,
+      "success_rate": "100/100"
+    }
+  }
+}
