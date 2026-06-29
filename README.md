@@ -20,7 +20,7 @@
 **1. Start the network:**
 ```bash
 cd test-network
-./network.sh up createChannel -ca
+./network.sh up createChannel
 ```
 
 **2. Add Org3:**
