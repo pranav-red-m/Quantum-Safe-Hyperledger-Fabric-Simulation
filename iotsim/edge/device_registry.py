@@ -3,8 +3,6 @@ import os
 from datetime import datetime
 
 from shared.config import DEVICE_REGISTRY_PATH, MAX_ATTACKS
-from shared.config import DEVICE_REGISTRY_PATH, MAX_ATTACKS, EDGE_CLUSTER_ID
-from security import blockchain_client
 
 
 class DeviceRegistry:
@@ -43,25 +41,12 @@ class DeviceRegistry:
     # =====================================================
     # Device Registration
     # =====================================================
-    #register device onto blockchain also
+
     def register_device(self, device_id):
 
-        is_new_device = device_id not in self.devices
-
-        if is_new_device:
+        if device_id not in self.devices:
 
             self.devices[device_id] = {}
-
-            try:
-                blockchain_client.register_device(
-                    device_id=device_id,
-                    device_type="sensor",
-                    edge_cluster=EDGE_CLUSTER_ID,
-                    org_msp="Org1MSP",
-                )
-                print(f"[REGISTRY] Device {device_id} registered on blockchain")
-            except RuntimeError as e:
-                print(f"[REGISTRY] Blockchain registration FAILED for {device_id}: {e}")
 
         device = self.devices[device_id]
 

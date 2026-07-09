@@ -11,7 +11,7 @@ EDGE_CLUSTER_ID = "edge-cluster-1"
 # ==========================================
 
 THREAT_THRESHOLD = 0.65
-RECONSTRUCTION_THRESHOLD = 0.15
+RECONSTRUCTION_THRESHOLD = 0.08
 
 # ==========================================
 # MODEL PATHS
@@ -63,7 +63,7 @@ RETRY_DELAY = 5
 # ==========================================
 
 FEATURE_COUNT = 46
-WINDOW_SIZE = 5
+WINDOW_SIZE = 10
 
 # ==========================================
 # LOGGING
