@@ -1,0 +1,23 @@
+{
+  "num_packets": 46,
+  "kem_time_ms_mean": 1.3367529780067422,
+  "kem_time_ms_std": 8.401792449472419,
+  "kem_time_ms_min": 0.08090400297078304,
+  "kem_time_ms_max": 57.08161299844505,
+  "encryption_time_ms_mean": 0.1180863479891306,
+  "encryption_time_ms_std": 0.21466996095882912,
+  "encryption_time_ms_min": 0.0666029991407413,
+  "encryption_time_ms_max": 1.5368730018963106,
+  "network_time_ms_mean": 8.919264217025637,
+  "network_time_ms_std": 11.849811605421062,
+  "network_time_ms_min": 5.974899002467282,
+  "network_time_ms_max": 87.23054599977331,
+  "total_time_ms_mean": 10.975772130578939,
+  "total_time_ms_std": 22.145664769803062,
+  "total_time_ms_min": 6.452424000599422,
+  "total_time_ms_max": 157.74679700189154,
+  "throughput_pps": 91.10976322239418,
+  "kem_ciphertext_size_bytes_mean": 768.0,
+  "nonce_size_bytes_mean": 12.0,
+  "ciphertext_size_bytes_mean": 1884.695652173913
+}
