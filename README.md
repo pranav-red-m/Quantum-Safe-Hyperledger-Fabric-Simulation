@@ -25,8 +25,8 @@ Start the network and create the channel:
 Set the required environment variables:
 
 ```bash
-export PATH=~/testingmultpeers/fabric-samples/bin:$PATH
-export FABRIC_CFG_PATH=~/testingmultpeers/fabric-samples/config/
+export PATH=/workspaces/Quantum-Safe-Hyperledger-Fabric-Simulation/fabric-samples/bin:$PATH
+export FABRIC_CFG_PATH=/workspaces/Quantum-Safe-Hyperledger-Fabric-Simulation/fabric-samples/config/
 source ./scripts/envVar.sh
 ```
 
