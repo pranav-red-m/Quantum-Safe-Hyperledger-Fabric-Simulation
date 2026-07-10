@@ -391,6 +391,18 @@ def scan():
 
     device_id = data.get("device_id","unknown_device")
     registry.update_seen(device_id)
+    if not registry.is_blockchain_registered(device_id):
+        try:
+            blockchain_client.register_device(
+                device_id=device_id,
+                device_type="iot_sensor",
+                edge_cluster=EDGE_CLUSTER_ID,
+                org_msp="Org1MSP"
+            )
+            registry.mark_blockchain_registered(device_id)
+            print(f"[EDGE] Registered {device_id} on blockchain")
+        except Exception as e:
+            print(f"[EDGE] Blockchain registration failed: {e}")
 
     print("\n==================================================")
     print("TRUST LOOKUP")

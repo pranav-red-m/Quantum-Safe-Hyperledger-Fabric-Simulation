@@ -79,6 +79,9 @@ class DeviceRegistry:
 
         if "threat_score" not in device:
             device["threat_score"] = 0.0
+        
+        if "blockchain_registered" not in device:
+            device["blockchain_registered"]=False
 
         self.save()
 
@@ -113,6 +116,20 @@ class DeviceRegistry:
         self.register_device(device_id)
 
         return self.devices[device_id]["trust_state"] == "REVOKED"
+
+    def is_blockchain_registered(self, device_id):
+
+        self.register_device(device_id)
+
+        return self.devices[device_id]["blockchain_registered"]
+
+    def mark_blockchain_registered(self, device_id):
+
+        self.register_device(device_id)
+
+        self.devices[device_id]["blockchain_registered"] = True
+
+        self.save()
     # =====================================================
     # Trust Update
     # Called ONLY after Decision Engine returns
