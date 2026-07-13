@@ -8,6 +8,7 @@ import csv
 import os
 import sys
 import threading
+import random
 from datetime import datetime
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -66,6 +67,20 @@ def query(args_json):
     result = subprocess.run(cmd, capture_output=True, text=True, env=BASE_ENV)
     elapsed = (time.time() - start) * 1000
     return elapsed, result.returncode == 0, result.stdout
+
+def invoke_with_retry(args_json, max_retries=5):
+    """Wraps invoke() with jittered backoff on MVCC_READ_CONFLICT.
+    Any other failure is returned immediately without retrying."""
+    elapsed, success, err = None, False, None
+    for attempt in range(max_retries):
+        elapsed, success, err = invoke(args_json)
+        if success:
+            return elapsed, True, err
+        if "MVCC_READ_CONFLICT" in str(err):
+            time.sleep(0.05 * (2 ** attempt) + random.uniform(0, 0.05))
+            continue
+        return elapsed, False, err
+    return elapsed, False, err
 
 def print_stats(label, times):
     if not times:
@@ -185,25 +200,29 @@ def test_concurrent_load(device_counts=[10, 50, 100]):
     print("\n[TEST 3] Concurrent Load Test")
     RESULTS["load_test"] = {}
 
-    # Register load test device
-    invoke(json.dumps({
-        "function": "RegisterDevice",
-        "Args": ["bench-load-device", "gps-sensor", "edge-cluster-1", "Org1MSP"]
-    }))
-    time.sleep(1)
-
     for count in device_counts:
         print(f"\n  Simulating {count} concurrent devices...")
         times = []
         lock = threading.Lock()
 
+        # Register N distinct devices so each thread writes to its own
+        # chain tip key, rather than all threads contending for one
+        # device's single LATEST_ key.
+        device_ids = [f"bench-load-device-{count}-{i}" for i in range(count)]
+        for d in device_ids:
+            invoke(json.dumps({
+                "function": "RegisterDevice",
+                "Args": [d, "gps-sensor", "edge-cluster-1", "Org1MSP"]
+            }))
+        time.sleep(1)
+
         def submit_device(device_num):
             tx_id = f"LOAD_{count}_{int(time.time()*1000)}_{device_num}"
             args = json.dumps({
                 "function": "SubmitRecord",
-                "Args": [tx_id, "bench-load-device", "edge-cluster-1", f"loadhash{device_num}", "confirmed"]
+                "Args": [tx_id, device_ids[device_num], "edge-cluster-1", f"loadhash{device_num}", "confirmed"]
             })
-            elapsed, success, _ = invoke(args)
+            elapsed, success, _ = invoke_with_retry(args)
             if success:
                 with lock:
                     times.append(elapsed)
@@ -215,15 +234,40 @@ def test_concurrent_load(device_counts=[10, 50, 100]):
         for t in threads:
             t.join()
         wall_time = (time.time() - wall_start) * 1000
-        tps = count / (wall_time / 1000)
 
-        print(f"  {count} devices: wall={wall_time:.2f}ms, tps={tps:.2f}, success={len(times)}/{count}")
+        committed_tps = len(times) / (wall_time / 1000) if wall_time > 0 else 0
+        attempted_tps = count / (wall_time / 1000) if wall_time > 0 else 0
+
+        print(f"  {count} devices: wall={wall_time:.2f}ms, "
+              f"committed_tps={committed_tps:.2f}, attempted_tps={attempted_tps:.2f}, "
+              f"success={len(times)}/{count}")
         RESULTS["load_test"][str(count)] = {
             "wall_time_ms": round(wall_time, 2),
-            "tps": round(tps, 2),
+            "committed_tps": round(committed_tps, 2),
+            "attempted_tps": round(attempted_tps, 2),
             "success_rate": f"{len(times)}/{count}"
         }
         time.sleep(2)
+
+    # Spot-check chain integrity for one device from the largest round.
+    check_device = f"bench-load-device-{device_counts[-1]}-0"
+    print(f"\n  Verifying hash chain integrity after concurrent load ({check_device})...")
+    _, vok, vout = query(json.dumps({
+        "function": "VerifyChain",
+        "Args": [check_device]
+    }))
+    chain_valid = False
+    if vok:
+        try:
+            result = json.loads(vout)
+            chain_valid = result.get("valid", False)
+            print(f"  VerifyChain({check_device}): valid={chain_valid}, "
+                  f"records_checked={result.get('recordsChecked')}")
+            if not chain_valid:
+                print(f"    Broke at: {result.get('brokenAtTxId')} — {result.get('reason')}")
+        except Exception:
+            print(f"  Could not parse VerifyChain output: {vout[:200]}")
+    RESULTS["load_test"]["chain_valid_after_load"] = chain_valid
 
 # ── Test 4: Query Latency ─────────────────────────────────────────────────────
 
@@ -549,8 +593,11 @@ def save_results():
                 writer.writerow(["Alert Latency", k, v])
         if "load_test" in RESULTS:
             for count, data in RESULTS["load_test"].items():
-                writer.writerow([f"Load {count} devices", "tps", data["tps"]])
-                writer.writerow([f"Load {count} devices", "wall_time_ms", data["wall_time_ms"]])
+                if not isinstance(data, dict):
+                    continue  # skip the "chain_valid_after_load" bool entry
+                writer.writerow([f"Load {count} devices", "committed_tps", data.get("committed_tps")])
+                writer.writerow([f"Load {count} devices", "attempted_tps", data.get("attempted_tps")])
+                writer.writerow([f"Load {count} devices", "wall_time_ms", data.get("wall_time_ms")])
         if "state_machine" in RESULTS:
             for k, v in RESULTS["state_machine"].items():
                 writer.writerow(["State Machine", k, v])

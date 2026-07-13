@@ -1,6 +1,8 @@
 package chaincode
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -18,6 +20,8 @@ type IoTRecord struct {
 	DataHash    string `json:"dataHash"`
 	Timestamp   string `json:"timestamp"`
 	Status      string `json:"status"`
+	PreviousRecordHash string `json:"previousRecordHash"`
+	RecordHash string `json:"recordHash"`
 }
 
 type RecordChallenge struct {
@@ -38,6 +42,28 @@ type Device struct {
 	Active      bool   `json:"active"`
 }
 
+func recordKey(txID string) string {
+	return "RECORD_" + txID
+}
+
+func computeRecordHash(r IoTRecord) string {
+	h := sha256.New()
+	h.Write([]byte(r.TxID))
+	h.Write([]byte("|"))
+	h.Write([]byte(r.DeviceID))
+	h.Write([]byte("|"))
+	h.Write([]byte(r.EdgeCluster))
+	h.Write([]byte("|"))
+	h.Write([]byte(r.DataHash))
+	h.Write([]byte("|"))
+	h.Write([]byte(r.Timestamp))
+	h.Write([]byte("|"))
+	h.Write([]byte(r.Status))
+	h.Write([]byte("|"))
+	h.Write([]byte(r.PreviousRecordHash))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func (s *SmartContract) SubmitRecord(
 	ctx contractapi.TransactionContextInterface,
 	txID string,
@@ -47,7 +73,8 @@ func (s *SmartContract) SubmitRecord(
 	status string,
 ) error {
 
-	existing, err := ctx.GetStub().GetState(txID)
+	key := recordKey(txID)
+	existing, err := ctx.GetStub().GetState(key)
 	if err != nil {
 		return fmt.Errorf("failed to read from ledger: %v", err)
 	}
@@ -71,34 +98,50 @@ func (s *SmartContract) SubmitRecord(
 	}
 
 	var device Device
-	err = json.Unmarshal(deviceJSON, &device)
-	if err != nil {
+	if err := json.Unmarshal(deviceJSON, &device); err != nil {
 		return fmt.Errorf("failed to unmarshal device: %v", err)
 	}
 	if !device.Active {
 		return fmt.Errorf("device %s has been deactivated and cannot submit records", deviceID)
 	}
 
-	record := IoTRecord{
-		TxID:        txID,
-		DeviceID:    deviceID,
-		EdgeCluster: edgeCluster,
-		DataHash:    dataHash,
-		Timestamp:   timestamp,
-		Status:      status,
+	// Look up this device's current chain tip. No prior record means this
+	// is the genesis record for the device's chain.
+	latestKey := "LATEST_" + deviceID
+	prevHashBytes, err := ctx.GetStub().GetState(latestKey)
+	if err != nil {
+		return fmt.Errorf("failed to read device chain tip: %v", err)
 	}
+	previousRecordHash := ""
+	if prevHashBytes != nil {
+		previousRecordHash = string(prevHashBytes)
+	}
+
+	record := IoTRecord{
+		TxID:               txID,
+		DeviceID:            deviceID,
+		EdgeCluster:         edgeCluster,
+		DataHash:            dataHash,
+		Timestamp:           timestamp,
+		Status:              status,
+		PreviousRecordHash:  previousRecordHash,
+	}
+	record.RecordHash = computeRecordHash(record)
 
 	recordJSON, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("failed to marshal record: %v", err)
 	}
 
-	err = ctx.GetStub().SetEvent("SubmitRecord", recordJSON)
-	if err != nil {
+	if err := ctx.GetStub().SetEvent("SubmitRecord", recordJSON); err != nil {
 		return fmt.Errorf("failed to set event: %v", err)
 	}
 
-	return ctx.GetStub().PutState(txID, recordJSON)
+	if err := ctx.GetStub().PutState(key, recordJSON); err != nil {
+		return fmt.Errorf("failed to write record: %v", err)
+	}
+
+	return ctx.GetStub().PutState(latestKey, []byte(record.RecordHash))
 }
 
 func (s *SmartContract) GetRecord(
@@ -106,7 +149,7 @@ func (s *SmartContract) GetRecord(
 	txID string,
 ) (*IoTRecord, error) {
 
-	recordJSON, err := ctx.GetStub().GetState(txID)
+	recordJSON, err := ctx.GetStub().GetState(recordKey(txID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read record %s: %v", txID, err)
 	}
@@ -115,20 +158,18 @@ func (s *SmartContract) GetRecord(
 	}
 
 	var record IoTRecord
-	err = json.Unmarshal(recordJSON, &record)
-	if err != nil {
+	if err := json.Unmarshal(recordJSON, &record); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal record: %v", err)
 	}
 
 	return &record, nil
 }
 
-
 func (s *SmartContract) GetAllRecords(
 	ctx contractapi.TransactionContextInterface,
 ) ([]*IoTRecord, error) {
 
-	iterator, err := ctx.GetStub().GetStateByRange("", "")
+	iterator, err := ctx.GetStub().GetStateByRange("RECORD_", "RECORD_~")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state iterator: %v", err)
 	}
@@ -143,8 +184,7 @@ func (s *SmartContract) GetAllRecords(
 		}
 
 		var record IoTRecord
-		err = json.Unmarshal(result.Value, &record)
-		if err != nil {
+		if err := json.Unmarshal(result.Value, &record); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal record: %v", err)
 		}
 
@@ -168,6 +208,98 @@ func (s *SmartContract) VerifyHash(
 	return record.DataHash == hash, nil
 }
 
+type ChainVerificationResult struct {
+	DeviceID     string `json:"deviceId"`
+	Valid        bool   `json:"valid"`
+	RecordsCheck int    `json:"recordsChecked"`
+	BrokenAtTxID string `json:"brokenAtTxId,omitempty" metadata:",optional"`
+	Reason       string `json:"reason,omitempty" metadata:",optional"`
+}
+
+func (s *SmartContract) VerifyChain(
+	ctx contractapi.TransactionContextInterface,
+	deviceID string,
+) (*ChainVerificationResult, error) {
+
+	all, err := s.GetAllRecords(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load records: %v", err)
+	}
+
+	var chain []*IoTRecord
+	for _, r := range all {
+		if r.DeviceID == deviceID {
+			chain = append(chain, r)
+		}
+	}
+
+	result := &ChainVerificationResult{DeviceID: deviceID}
+
+	if len(chain) == 0 {
+		result.Valid = false
+		result.Reason = "no records found for device"
+		return result, nil
+	}
+
+	byPrevHash := make(map[string]*IoTRecord, len(chain))
+	var genesis *IoTRecord
+	genesisCount := 0
+	for _, r := range chain {
+		if r.PreviousRecordHash == "" {
+			genesis = r
+			genesisCount++
+		} else {
+			if _, exists := byPrevHash[r.PreviousRecordHash]; exists {
+				result.Valid = false
+				result.Reason = "two records share the same PreviousRecordHash — chain forked (likely concurrent writes without proper serialization)"
+				return result, nil
+			}
+			byPrevHash[r.PreviousRecordHash] = r
+		}
+	}
+	if genesisCount != 1 {
+		result.Valid = false
+		result.Reason = fmt.Sprintf("expected exactly 1 genesis record, found %d", genesisCount)
+		return result, nil
+	}
+
+	ordered := []*IoTRecord{genesis}
+	cur := genesis
+	for len(ordered) < len(chain) {
+		next, ok := byPrevHash[cur.RecordHash]
+		if !ok {
+			result.Valid = false
+			result.BrokenAtTxID = cur.TxID
+			result.Reason = "no record found linking to this hash — chain is broken or incomplete"
+			return result, nil
+		}
+		ordered = append(ordered, next)
+		cur = next
+	}
+
+	for _, r := range ordered {
+		result.RecordsCheck++
+		recomputed := computeRecordHash(IoTRecord{
+			TxID:               r.TxID,
+			DeviceID:           r.DeviceID,
+			EdgeCluster:        r.EdgeCluster,
+			DataHash:           r.DataHash,
+			Timestamp:          r.Timestamp,
+			Status:             r.Status,
+			PreviousRecordHash: r.PreviousRecordHash,
+		})
+		if recomputed != r.RecordHash {
+			result.Valid = false
+			result.BrokenAtTxID = r.TxID
+			result.Reason = "stored RecordHash does not match recomputed hash — record contents were altered after submission"
+			return result, nil
+		}
+	}
+
+	result.Valid = true
+	return result, nil
+}
+
 // SubmitBatch allows edge nodes to submit multiple IoT records in one transaction
 func (s *SmartContract) SubmitBatch(
 	ctx contractapi.TransactionContextInterface,
@@ -175,9 +307,11 @@ func (s *SmartContract) SubmitBatch(
 ) error {
 
 	var records []IoTRecord
-	err := json.Unmarshal([]byte(recordsJSON), &records)
-	if err != nil {
+	if err := json.Unmarshal([]byte(recordsJSON), &records); err != nil {
 		return fmt.Errorf("failed to parse batch records: %v", err)
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("batch must contain at least one record")
 	}
 
 	txTime, err := ctx.GetStub().GetTxTimestamp()
@@ -186,10 +320,19 @@ func (s *SmartContract) SubmitBatch(
 	}
 	timestamp := fmt.Sprintf("%d", txTime.Seconds)
 
+	seen := make(map[string]bool, len(records))
+	chainTips := make(map[string]string)
+
 	for _, record := range records {
+		if seen[record.TxID] {
+			return fmt.Errorf("duplicate txID %s within batch", record.TxID)
+		}
+		seen[record.TxID] = true
+
 		record.Timestamp = timestamp
 
-		existing, err := ctx.GetStub().GetState(record.TxID)
+		key := recordKey(record.TxID)
+		existing, err := ctx.GetStub().GetState(key)
 		if err != nil {
 			return fmt.Errorf("failed to read ledger for %s: %v", record.TxID, err)
 		}
@@ -197,22 +340,45 @@ func (s *SmartContract) SubmitBatch(
 			return fmt.Errorf("record %s already exists", record.TxID)
 		}
 
+		prevHash, inBatch := chainTips[record.DeviceID]
+		if !inBatch {
+			latestKey := "LATEST_" + record.DeviceID
+			prevHashBytes, err := ctx.GetStub().GetState(latestKey)
+			if err != nil {
+				return fmt.Errorf("failed to read chain tip for %s: %v", record.DeviceID, err)
+			}
+			if prevHashBytes != nil {
+				prevHash = string(prevHashBytes)
+			}
+		}
+
+		record.PreviousRecordHash = prevHash
+		record.RecordHash = computeRecordHash(record)
+		chainTips[record.DeviceID] = record.RecordHash
+
 		recordJSON, err := json.Marshal(record)
 		if err != nil {
 			return fmt.Errorf("failed to marshal record %s: %v", record.TxID, err)
 		}
 
-		err = ctx.GetStub().PutState(record.TxID, recordJSON)
-		if err != nil {
+		if err := ctx.GetStub().PutState(key, recordJSON); err != nil {
 			return fmt.Errorf("failed to write record %s: %v", record.TxID, err)
 		}
 	}
 
-	batchEvent := map[string]int{"recordsSubmitted": len(records)}
-	batchJSON, _ := json.Marshal(batchEvent)
-	ctx.GetStub().SetEvent("BatchSubmitted", batchJSON)
+	for deviceID, tipHash := range chainTips {
+		latestKey := "LATEST_" + deviceID
+		if err := ctx.GetStub().PutState(latestKey, []byte(tipHash)); err != nil {
+			return fmt.Errorf("failed to update chain tip for %s: %v", deviceID, err)
+		}
+	}
 
-	return nil
+	batchEvent := map[string]int{"recordsSubmitted": len(records)}
+	batchJSON, err := json.Marshal(batchEvent)
+	if err != nil {
+		return fmt.Errorf("failed to marshal batch event: %v", err)
+	}
+	return ctx.GetStub().SetEvent("BatchSubmitted", batchJSON)
 }
 
 // RaiseAlert writes an IDS anomaly alert immutably to the blockchain
@@ -266,20 +432,19 @@ func (s *SmartContract) RaiseAlert(
 		return fmt.Errorf("failed to marshal alert: %v", err)
 	}
 
-	err = ctx.GetStub().SetEvent("AnomalyAlert", alertJSON)
-	if err != nil {
+	if err := ctx.GetStub().SetEvent("AnomalyAlert", alertJSON); err != nil {
 		return fmt.Errorf("failed to set event: %v", err)
 	}
 
-	// Also flag the original record if txID provided
 	if txID != "" {
-		recordJSON, err := ctx.GetStub().GetState(txID)
+		rKey := recordKey(txID)
+		recordJSON, err := ctx.GetStub().GetState(rKey)
 		if err == nil && recordJSON != nil {
 			var record IoTRecord
 			if json.Unmarshal(recordJSON, &record) == nil {
 				record.Status = "flagged"
 				updated, _ := json.Marshal(record)
-				ctx.GetStub().PutState(txID, updated)
+				ctx.GetStub().PutState(rKey, updated)
 			}
 		}
 	}
@@ -349,8 +514,7 @@ func (s *SmartContract) ChallengeRecord(
 	reason string,
 ) error {
 
-	// Check the record being challenged actually exists
-	recordJSON, err := ctx.GetStub().GetState(txID)
+	recordJSON, err := ctx.GetStub().GetState(recordKey(txID))
 	if err != nil {
 		return fmt.Errorf("failed to read record: %v", err)
 	}
@@ -358,7 +522,6 @@ func (s *SmartContract) ChallengeRecord(
 		return fmt.Errorf("record %s does not exist", txID)
 	}
 
-	// Check challenge doesn't already exist
 	key := "CHALLENGE_" + challengeID
 	existing, err := ctx.GetStub().GetState(key)
 	if err != nil {
@@ -368,7 +531,6 @@ func (s *SmartContract) ChallengeRecord(
 		return fmt.Errorf("challenge %s already exists", challengeID)
 	}
 
-	// Get the MSP ID of the org raising the challenge
 	clientMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
 		return fmt.Errorf("failed to get client MSP: %v", err)
@@ -395,7 +557,6 @@ func (s *SmartContract) ChallengeRecord(
 		return fmt.Errorf("failed to marshal challenge: %v", err)
 	}
 
-	// Emit event so all orgs are notified
 	ctx.GetStub().SetEvent("RecordChallenged", challengeJSON)
 
 	return ctx.GetStub().PutState(key, challengeJSON)
@@ -502,18 +663,17 @@ func (s *SmartContract) UpdateRecordStatus(
 	newStatus string,
 ) error {
 
-	// Valid state transitions
 	validTransitions := map[string][]string{
-		"confirmed":  {"validated"},
-		"submitted":  {"validated"},
-		"validated":  {"approved", "flagged"},
-		"approved":   {"archived"},
-		"flagged":    {"resolved"},
-		"resolved":   {"archived"},
+		"confirmed": {"validated"},
+		"submitted": {"validated"},
+		"validated": {"approved", "flagged"},
+		"approved":  {"archived"},
+		"flagged":   {"resolved"},
+		"resolved":  {"archived"},
 	}
 
-	// Read existing record
-	recordJSON, err := ctx.GetStub().GetState(txID)
+	key := recordKey(txID)
+	recordJSON, err := ctx.GetStub().GetState(key)
 	if err != nil {
 		return fmt.Errorf("failed to read record %s: %v", txID, err)
 	}
@@ -522,12 +682,10 @@ func (s *SmartContract) UpdateRecordStatus(
 	}
 
 	var record IoTRecord
-	err = json.Unmarshal(recordJSON, &record)
-	if err != nil {
+	if err := json.Unmarshal(recordJSON, &record); err != nil {
 		return fmt.Errorf("failed to unmarshal record: %v", err)
 	}
 
-	// Check if transition is valid
 	allowedStatuses, exists := validTransitions[record.Status]
 	if !exists {
 		return fmt.Errorf("record %s has unknown status: %s", txID, record.Status)
@@ -543,12 +701,11 @@ func (s *SmartContract) UpdateRecordStatus(
 
 	if !valid {
 		return fmt.Errorf(
-			"invalid transition for record %s: %s → %s (allowed: %v)",
+			"invalid transition for record %s: %s -> %s (allowed: %v)",
 			txID, record.Status, newStatus, allowedStatuses,
 		)
 	}
 
-	// Apply the new status
 	record.Status = newStatus
 
 	updated, err := json.Marshal(record)
@@ -556,10 +713,11 @@ func (s *SmartContract) UpdateRecordStatus(
 		return fmt.Errorf("failed to marshal updated record: %v", err)
 	}
 
-	// Emit event so all orgs are notified of status change
-	ctx.GetStub().SetEvent("RecordStatusUpdated", updated)
+	if err := ctx.GetStub().SetEvent("RecordStatusUpdated", updated); err != nil {
+		return fmt.Errorf("failed to set event: %v", err)
+	}
 
-	return ctx.GetStub().PutState(txID, updated)
+	return ctx.GetStub().PutState(key, updated)
 }
 
 // RegisterDevice registers an IoT device on the blockchain
@@ -682,48 +840,48 @@ func (s *SmartContract) GetAllDevices(
 }
 
 func (s *SmartContract) GetRecordHistory(
-    ctx contractapi.TransactionContextInterface,
-    txID string,
+	ctx contractapi.TransactionContextInterface,
+	txID string,
 ) (string, error) {
 
-    iterator, err := ctx.GetStub().GetHistoryForKey(txID)
-    if err != nil {
-        return "", fmt.Errorf("failed to get history: %v", err)
-    }
-    defer iterator.Close()
+	iterator, err := ctx.GetStub().GetHistoryForKey(recordKey(txID))
+	if err != nil {
+		return "", fmt.Errorf("failed to get history: %v", err)
+	}
+	defer iterator.Close()
 
-    type HistoryEntry struct {
-        TxID      string    `json:"txId"`
-        Value     IoTRecord `json:"value"`
-        Timestamp string    `json:"timestamp"`
-        IsDelete  bool      `json:"isDelete"`
-    }
+	type HistoryEntry struct {
+		TxID      string    `json:"txId"`
+		Value     IoTRecord `json:"value"`
+		Timestamp string    `json:"timestamp"`
+		IsDelete  bool      `json:"isDelete"`
+	}
 
-    var history []HistoryEntry
+	var history []HistoryEntry
 
-    for iterator.HasNext() {
-        result, err := iterator.Next()
-        if err != nil {
-            return "", err
-        }
+	for iterator.HasNext() {
+		result, err := iterator.Next()
+		if err != nil {
+			return "", err
+		}
 
-        var record IoTRecord
-        if !result.IsDelete {
-            json.Unmarshal(result.Value, &record)
-        }
+		var record IoTRecord
+		if !result.IsDelete {
+			json.Unmarshal(result.Value, &record)
+		}
 
-        history = append(history, HistoryEntry{
-            TxID:      result.TxId,
-            Value:     record,
-            Timestamp: fmt.Sprintf("%d", result.Timestamp.Seconds),
-            IsDelete:  result.IsDelete,
-        })
-    }
+		history = append(history, HistoryEntry{
+			TxID:      result.TxId,
+			Value:     record,
+			Timestamp: fmt.Sprintf("%d", result.Timestamp.Seconds),
+			IsDelete:  result.IsDelete,
+		})
+	}
 
-    historyJSON, err := json.Marshal(history)
-    if err != nil {
-        return "", err
-    }
+	historyJSON, err := json.Marshal(history)
+	if err != nil {
+		return "", err
+	}
 
-    return string(historyJSON), nil
+	return string(historyJSON), nil
 }

@@ -1,0 +1,44 @@
+Test,Metric,Value
+Single Latency,mean,2079.95
+Single Latency,median,2077.94
+Single Latency,stdev,8.03
+Single Latency,min,2074.39
+Single Latency,max,2118.74
+Single Latency,failures,0
+Alert Latency,mean,2077.33
+Alert Latency,median,2075.56
+Alert Latency,stdev,5.78
+Alert Latency,min,2071.51
+Alert Latency,max,2097.42
+Load 10 devices,committed_tps,69.74
+Load 10 devices,attempted_tps,69.74
+Load 10 devices,wall_time_ms,143.39
+Load 50 devices,committed_tps,54.8
+Load 50 devices,attempted_tps,54.8
+Load 50 devices,wall_time_ms,912.45
+Load 100 devices,committed_tps,64.46
+Load 100 devices,attempted_tps,64.46
+Load 100 devices,wall_time_ms,1551.37
+State Machine,mean,2076.65
+State Machine,median,2076.14
+State Machine,stdev,2.32
+State Machine,min,2073.59
+State Machine,max,2079.84
+State Machine,failures,0
+Challenge Record,mean,2078.5
+Challenge Record,median,2078.29
+Challenge Record,stdev,4.31
+Challenge Record,min,2074.01
+Challenge Record,max,2088.88
+Challenge Record,failures,0
+Device Registry,mean,2077.49
+Device Registry,median,2074.58
+Device Registry,stdev,9.21
+Device Registry,min,2071.62
+Device Registry,max,2114.87
+Record History,mean,42.85
+Record History,median,42.24
+Record History,stdev,2.4
+Record History,min,40.72
+Record History,max,51.73
+Record History,failures,0

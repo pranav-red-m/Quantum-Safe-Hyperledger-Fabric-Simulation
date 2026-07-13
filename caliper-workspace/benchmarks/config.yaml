@@ -1,0 +1,14 @@
+test:
+  name: iotcc-submit-record-benchmark
+  description: SubmitRecord throughput and latency at varying concurrency
+  workers:
+    number: 10
+  rounds:
+    - label: submit-10-clients
+      txNumber: 100
+      rateControl:
+        type: fixed-load
+        opts:
+          transactionLoad: 10
+      workload:
+        module: workload/submitRecord.js
