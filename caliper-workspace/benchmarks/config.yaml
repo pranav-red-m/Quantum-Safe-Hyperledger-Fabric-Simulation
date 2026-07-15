@@ -1,14 +1,179 @@
 test:
-  name: iotcc-submit-record-benchmark
-  description: SubmitRecord throughput and latency at varying concurrency
+  name: iotcc-ieee-benchmark
+  description: Hyperledger Fabric IoT Benchmark Suite — write and read throughput/latency sweep
+
   workers:
-    number: 10
+    number: 1   # overridden per round below
+
   rounds:
-    - label: submit-10-clients
-      txNumber: 100
+    - label: register-devices
+      description: Register the 10 devices used by every round in this suite
+      txNumber: 10
+      workers:
+        number: 1
       rateControl:
-        type: fixed-load
+        type: fixed-rate
         opts:
-          transactionLoad: 10
+          tps: 5
+      workload:
+        module: workload/registerDevices.js
+
+    - label: seed-records
+      description: Seed a deterministic record pool for the read sweep (get-*tps)
+      txDuration: 30
+      workers:
+        number: 2
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 20
+      workload:
+        module: workload/seedRecords.js
+        arguments:
+          recordsPerWorker: 200
+
+    # ---- Write sweep: submit-record throughput/latency vs. offered load --
+
+    - label: submit-10tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 1
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 10
       workload:
         module: workload/submitRecord.js
+
+    - label: submit-25tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 2
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 25
+      workload:
+        module: workload/submitRecord.js
+
+    - label: submit-50tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 4
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 50
+      workload:
+        module: workload/submitRecord.js
+
+    - label: submit-100tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 8
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 100
+      workload:
+        module: workload/submitRecord.js
+
+    - label: submit-200tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 15
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 200
+      workload:
+        module: workload/submitRecord.js
+
+    # ---- Read sweep: get-record throughput/latency vs. offered load ------
+
+    - label: get-10tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 1
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 10
+      workload:
+        module: workload/getRecord.js
+        arguments:
+          seedRecordsPerWorker: 200
+
+    - label: get-25tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 2
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 25
+      workload:
+        module: workload/getRecord.js
+        arguments:
+          seedRecordsPerWorker: 200
+
+    - label: get-50tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 4
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 50
+      workload:
+        module: workload/getRecord.js
+        arguments:
+          seedRecordsPerWorker: 200
+
+    - label: get-100tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 8
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 100
+      workload:
+        module: workload/getRecord.js
+        arguments:
+          seedRecordsPerWorker: 200
+
+    - label: get-200tps
+      txDuration: 60
+      repeat: 3
+      workers:
+        number: 15
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 200
+      workload:
+        module: workload/getRecord.js
+        arguments:
+          seedRecordsPerWorker: 200
+
+monitors:
+  resource:
+    - module: docker
+      options:
+        interval: 5
+        containers:
+          - all
+  transaction:
+    - module: prometheus-push
+      options:
+        interval: 5
