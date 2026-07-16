@@ -116,10 +116,10 @@ echo "  Verifying..."
 echo "============================================"
 peer lifecycle chaincode querycommitted --channelID mychannel --name iotcc
 
+sleep 3
+
 echo ""
-echo "============================================"
-echo "  Registering device..."
-echo "============================================"
+echo "Initializing ledger..."
 peer chaincode invoke \
     -o localhost:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
@@ -129,14 +129,15 @@ peer chaincode invoke \
     --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
     --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
     --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
-    -c '{"function":"RegisterDevice","Args":["device-001","sensor","edge-cluster-1","Org1MSP"]}'
+    -c '{"function":"InitLedger","Args":[]}'
+
+echo "============================================"
+echo "  Partial block -> Full block smoke test"
+echo "============================================"
 
 sleep 3
 
-echo ""
-echo "============================================"
-echo "  Quick test invoke..."
-echo "============================================"
+echo "Submitting partial block..."
 peer chaincode invoke \
     -o localhost:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
@@ -146,17 +147,47 @@ peer chaincode invoke \
     --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
     --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
     --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
-    -c '{"function":"SubmitRecord","Args":["TX001","device-001","edge-cluster-1","abc123hash","confirmed"]}'
+    -c '{"function":"SubmitPartialBlock","Args":["PB001","edge-cluster-1","deadbeef","cafebabe","feedface","edge-cluster-1","device-001"]}'
 
 sleep 3
 
 echo ""
-echo "Querying registered device..."
-peer chaincode query -C mychannel -n iotcc -c '{"function":"GetDevice","Args":["device-001"]}'
+echo "Finalizing full block from partial block..."
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls \
+    --cafile $ORDERER_CA \
+    -C mychannel -n iotcc \
+    --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
+    --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
+    --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
+    -c '{"function":"FinalizeFullBlock","Args":["FB001","PB001","123456","true"]}'
+
+sleep 3
 
 echo ""
-echo "Querying all records..."
-peer chaincode query -C mychannel -n iotcc -c '{"function":"GetAllRecords","Args":[]}'
+echo "Querying full block..."
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetFullBlock","Args":["FB001"]}'
+
+echo ""
+echo "Committing full block..."
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls \
+    --cafile $ORDERER_CA \
+    -C mychannel -n iotcc \
+    --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
+    --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
+    --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
+    -c '{"function":"CommitFullBlock","Args":["FB001"]}'
+
+sleep 3
+
+echo ""
+echo "Querying chain meta (should show updated tip + height)..."
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetChainMeta","Args":[]}'
 
 echo ""
 echo "============================================"

@@ -897,156 +897,61 @@ def scan():
     print("==================================================")
     blockchain_status = "not_attempted"
     blockchain_tx_id = None
+    blockchain_block_id = None
 
     blockchain_tx_id = f"TX-{device_id}-{int(evidence['timestamp'] * 1000)}"
-    blockchain_alert_id = f"ALERT-{device_id}-{int(evidence['timestamp'] * 1000)}"
 
     try:
-        submit_ms = blockchain_client.submit_record(
-            tx_id=blockchain_tx_id, device_id=device_id,
-            edge_cluster=EDGE_CLUSTER_ID, data_hash=evidence_hash, status="confirmed",
+        submit_ms = blockchain_client.submit_partial_block(
+            partial_id=blockchain_tx_id,
+            owner=EDGE_CLUSTER_ID,
+            owner_pub_key=public_key,
+            encrypted_tx=evidence_hash,
+            signature=signature,
+            edge_cluster=EDGE_CLUSTER_ID,
+            device_id=device_id,
         )
-        alert_ms = blockchain_client.raise_alert(
-            alert_id=blockchain_alert_id, tx_id=blockchain_tx_id, device_id=device_id,
-            severity=decision, description=f"score={threat_score:.4f}", flagged_by="edge-gateway-ids",
-        )
-        performance["Blockchain SubmitRecord"] = submit_ms
-        performance["Blockchain RaiseAlert"] = alert_ms
-        blockchain_status = "committed"
-        print(f"Status : COMMITTED ({submit_ms:.1f}ms + {alert_ms:.1f}ms)")
-    except Exception as e:   # widen from RuntimeError to Exception
+        performance["Blockchain SubmitPartialBlock"] = submit_ms
+        blockchain_status = "pending"
+        print(f"Status : PENDING ({submit_ms:.1f}ms)")
+    except Exception as e:
         blockchain_status = "failed"
         print(f"Status : FAILED ({e})")
-
-    # ===========================
-    # SEND TO CLOUD
-    # ===========================
-
-    try:
-
-        response = requests.post(
-
-            f"http://localhost:{CLOUD_PORT}/retrain",
-
-            json=attack_payload,
-
-            timeout=10
-
-        )
-
-        response.raise_for_status()
-
-        print("\n==================================================")
-        print("CLOUD CONTINUAL LEARNING")
-        print("==================================================")
-        print("[EDGE] Summary Successfully Sent")
-
-    except requests.exceptions.ConnectionError:
-
-        retry_queue.append(
-            attack_payload
-        )
-
-        print("\n==================================================")
-        print("CLOUD CONTINUAL LEARNING")
-        print("==================================================")
-        print("[EDGE] Cloud Offline")
-        print("[EDGE] Summary Added To Retry Queue")
-
-    except requests.exceptions.HTTPError as e:
-
-     print("\n==================================================")
-     print("CLOUD SERVER ERROR")
-     print("==================================================")
-     print(response.text)
-     raise e
-
-    return jsonify({
-        "status": status,
-        "device": device_id,
-        "attack_count": registry.get_device(device_id)["attack_count"],
-        "evidence_hash": evidence_hash,
-        "score": threat_score,
-        "message": "Cloud returned HTTP 500"
-    })
-
-
-    # ===========================
-    # MODEL UPDATE
-    # ===========================
-
-    content_type = response.headers.get(
-
-        "Content-Type",
-
-        ""
-
-    )
-
-    if "application/octet-stream" in content_type:
-
-        package = torch.load(
-
-            io.BytesIO(
-
-                response.content
-
-            ),
-
-            map_location="cpu",
-
-            weights_only=False
-
-        )
-
-        version = package["version"]
-
-        if version > CURRENT_VERSION:
-
-            edge_model.load_state_dict(
-
-                package["weights"]
-
-            )
-
-            edge_model.eval()
-
-            CURRENT_VERSION = version
-
-            print("\n==================================================")
-            print("MODEL UPDATE")
-            print("==================================================")
-            print(f"Updated Edge Model -> Version {version}")
-
-    else:
-
+    if blockchain_status == "pending":
         try:
-
-            cloud_response = response.json()
-
-            print("\n==================================================")
-            print("CLOUD CONTINUAL LEARNING")
-            print("==================================================")
-            print(f"Status               : {cloud_response.get('status')}")
-            print(f"Attack Buffer        : {cloud_response.get('attack', 0)}")
-            print(f"Benign Buffer        : {cloud_response.get('benign', 0)}")
-            print(f"Total Samples        : {cloud_response.get('total', 0)}")
-
-        except Exception:
-
-            pass
-
-
-    print("\n==================================================")
-    print("TRUST UPDATE")
-    print("==================================================")
-
-    updated = registry.get_device(device_id)
-
-    print(f"Trust State           : {updated['trust_state']}")
-    print(f"Attack Count          : {updated['attack_count']}")
-    print(f"Current Decision      : {status}")
-
+            finalize_start = time.perf_counter()
+ 
+            finalize_response = requests.post(
+                f"http://localhost:{CLOUD_PORT}/finalize_block",
+                json={
+                    "partial_id": blockchain_tx_id,
+                    "evidence": evidence,
+                    "signature": signature,
+                    "public_key": public_key,
+                    "evidence_hash": evidence_hash,
+                },
+                timeout=15,
+            )
+ 
+            finalize_ms = (time.perf_counter() - finalize_start) * 1000
+            performance["Blockchain Finalize+Commit (round trip)"] = finalize_ms
+ 
+            finalize_result = finalize_response.json()
+ 
+            if finalize_response.status_code == 200 and finalize_result.get("status") == "committed":
+                blockchain_status = "committed"
+                blockchain_block_id = finalize_result.get("block_id")
+                print(f"Status : COMMITTED ({finalize_ms:.1f}ms round trip)")
+            else:
+                blockchain_status = finalize_result.get("status", "finalize_failed")
+                blockchain_block_id = finalize_result.get("block_id")
+                print(f"Status : {blockchain_status.upper()} "
+                      f"({finalize_result.get('reason', 'see cloud logs')})")
+ 
+        except Exception as e:
+            blockchain_status = "finalize_unreachable"
+            blockchain_block_id = None
+            print(f"Status : CLOUD UNREACHABLE FOR FINALIZE ({e})")
     print("\n==================================================")
     print("PERFORMANCE METRICS")
     print("==================================================")
@@ -1054,31 +959,23 @@ def scan():
     total_latency = 0
 
     for name, value in performance.items():
-
         print(f"{name:<30}: {value:.3f} ms")
-
         total_latency += value
 
     print("-----------------------------------------------")
     print(f"{'Measured Total':<30}: {total_latency:.3f} ms")
-    
+
     return jsonify({
-
-    "status": status,
-
-    "device": device_id,
-
-    "attack_count": registry.get_device(device_id)["attack_count"],
-
-    "evidence_hash": evidence_hash,
-
-    "score": threat_score,
-
-    "model_version": CURRENT_VERSION
-
-})
-
-
+        "status": status,
+        "device": device_id,
+        "attack_count": registry.get_device(device_id)["attack_count"],
+        "evidence_hash": evidence_hash,
+        "score": threat_score,
+        "blockchain_status": blockchain_status,
+        "blockchain_tx_id": blockchain_tx_id,
+        "blockchain_block_id": blockchain_block_id,
+        "model_version": CURRENT_VERSION,
+    })
 # ===========================
 # DEVICE APIs
 # ===========================
@@ -1093,10 +990,10 @@ def network_status():
 
 @app.route("/reset_device", methods=["POST"])
 def reset_device():
-    data=request.json
-    device=data["device_id"]
+    data = request.json
+    device = data["device_id"]
     registry.reset_device(device)
-    return jsonify({"status":"success","device":device})
+    return jsonify({"status": "success", "device": device})
 
 # ===========================
 # START SERVER
@@ -1105,19 +1002,12 @@ def reset_device():
 if __name__ == "__main__":
 
     print()
-
     print("==============================")
-
     print(" Edge Gateway Started ")
-
     print("==============================")
 
     app.run(
-
         host="0.0.0.0",
-
         port=EDGE_PORT,
-
-        debug=False
-
+        debug=False,
     )

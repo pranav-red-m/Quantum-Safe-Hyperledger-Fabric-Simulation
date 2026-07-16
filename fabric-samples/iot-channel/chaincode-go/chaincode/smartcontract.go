@@ -12,876 +12,343 @@ import (
 type SmartContract struct {
 	contractapi.Contract
 }
-
-type IoTRecord struct {
-	TxID        string `json:"txId"`
-	DeviceID    string `json:"deviceId"`
-	EdgeCluster string `json:"edgeCluster"`
-	DataHash    string `json:"dataHash"`
-	Timestamp   string `json:"timestamp"`
-	Status      string `json:"status"`
-	PreviousRecordHash string `json:"previousRecordHash"`
-	RecordHash string `json:"recordHash"`
+// PartialBlock = ParBESRi = [OWESRi, PUESRi, ENC_PUESRi(TRASESRi)]
+type PartialBlock struct {
+	PartialBlockID string `json:"partialBlockId"`
+	OwnerID        string `json:"ownerId"`        // OWESRi
+	OwnerPubKey    string `json:"ownerPubKey"`     // PUESRi
+	EncryptedTx    string `json:"encryptedTx"`     // ENC_PUESRi(TRASESRi)
+	Signature      string `json:"signature"`       // sgESRi, produced at the edge, carried through
+	EdgeCluster    string `json:"edgeCluster"`
+	DeviceID       string `json:"deviceId"`
+	Status         string `json:"status"` // PENDING | SEALED
+	FullBlockID    string `json:"fullBlockId,omitempty"`
 }
 
-type RecordChallenge struct {
-	ChallengeID    string `json:"challengeId"`
-	TxID           string `json:"txId"`
-	ChallengingOrg string `json:"challengingOrg"`
-	Reason         string `json:"reason"`
-	Status         string `json:"status"`
-	Timestamp      string `json:"timestamp"`
-	Resolution     string `json:"resolution"`
+// FullBlock = FulBESRi = [BIDESRi, TSi, RNi, hashESRi, hashESRi-1, OWESRi, PUESRi, ENC_PUESRi(TRASESRi), sgESRi]
+type FullBlock struct {
+	BlockID         string `json:"blockId"`      // BIDESRi
+	Timestamp       string `json:"timestamp"`    // TSi - set by chaincode via ctx.GetStub().GetTxTimestamp(), not client-supplied
+	Nonce           string `json:"nonce"`        // RNi
+	Hash            string `json:"hash"`         // hashESRi
+	PreviousHash    string `json:"previousHash"` // hashESRi-1
+	OwnerID         string `json:"ownerId"`
+	OwnerPubKey     string `json:"ownerPubKey"`
+	EncryptedTx     string `json:"encryptedTx"`
+	Signature       string `json:"signature"`         // sgESRi, carried from PartialBlock
+	SignatureVerified bool `json:"signatureVerified"` // asserted by caller at FinalizeFullBlock time
+	PartialBlockID  string `json:"partialBlockId"`
+	DeviceID        string `json:"deviceId"`
+	ConsensusStatus string `json:"consensusStatus"` // PROPOSED | COMMITTED | REJECTED
 }
 
-type Device struct {
-	DeviceID    string `json:"deviceId"`
-	DeviceType  string `json:"deviceType"`
-	EdgeCluster string `json:"edgeCluster"`
-	OrgMSP      string `json:"orgMsp"`
-	Active      bool   `json:"active"`
+type ChainMeta struct {
+	LatestHash    string `json:"latestHash"`
+	LatestBlockID string `json:"latestBlockId"`
+	Height        int    `json:"height"`
 }
 
-func recordKey(txID string) string {
-	return "RECORD_" + txID
-}
+const (
+	chainMetaKey = "CHAIN_META"
+	genesisHash  = "0000000000000000000000000000000000000000000000000000000000000"
+)
 
-func computeRecordHash(r IoTRecord) string {
-	h := sha256.New()
-	h.Write([]byte(r.TxID))
-	h.Write([]byte("|"))
-	h.Write([]byte(r.DeviceID))
-	h.Write([]byte("|"))
-	h.Write([]byte(r.EdgeCluster))
-	h.Write([]byte("|"))
-	h.Write([]byte(r.DataHash))
-	h.Write([]byte("|"))
-	h.Write([]byte(r.Timestamp))
-	h.Write([]byte("|"))
-	h.Write([]byte(r.Status))
-	h.Write([]byte("|"))
-	h.Write([]byte(r.PreviousRecordHash))
-	return hex.EncodeToString(h.Sum(nil))
-}
+// ---------- Init ----------
 
-func (s *SmartContract) SubmitRecord(
-	ctx contractapi.TransactionContextInterface,
-	txID string,
-	deviceID string,
-	edgeCluster string,
-	dataHash string,
-	status string,
-) error {
-
-	key := recordKey(txID)
-	existing, err := ctx.GetStub().GetState(key)
-	if err != nil {
-		return fmt.Errorf("failed to read from ledger: %v", err)
+func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface) error {
+	meta := ChainMeta{
+		LatestHash:    genesisHash,
+		LatestBlockID: "GENESIS",
+		Height:        0,
 	}
-	if existing != nil {
-		return fmt.Errorf("record with ID %s already exists", txID)
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("failed to marshal chain meta: %v", err)
+	}
+	return ctx.GetStub().PutState(chainMetaKey, metaJSON)
+}
+
+// ---------- Edge Server: create partial block ----------
+
+// CreatePartialBlock is invoked by an edge server (ESRi) after it has
+// authenticated the IoT device and processed its data into a transaction.
+// It stores ParBESRi = [OWESRi, PUESRi, ENC_PUESRi(TRASESRi)].
+func (s *SmartContract) SubmitPartialBlock(
+	ctx contractapi.TransactionContextInterface,
+	partialBlockID string,
+	ownerID string,
+	ownerPubKey string,
+	encryptedTx string,
+	signature string,
+	edgeCluster string,
+	deviceID string,
+) error {
+	exists, err := s.assetExists(ctx, partialBlockID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("partial block %s already exists", partialBlockID)
+	}
+	if ownerID == "" || ownerPubKey == "" || encryptedTx == "" || signature == "" || deviceID == "" {
+		return fmt.Errorf("ownerID, ownerPubKey, encryptedTx, signature and deviceID are required")
+	}
+
+	partial := PartialBlock{
+		PartialBlockID: partialBlockID,
+		OwnerID:        ownerID,
+		OwnerPubKey:    ownerPubKey,
+		EncryptedTx:    encryptedTx,
+		Signature:      signature,
+		EdgeCluster:    edgeCluster,
+		DeviceID:       deviceID,
+		Status:         "PENDING",
+	}
+	partialJSON, err := json.Marshal(partial)
+	if err != nil {
+		return fmt.Errorf("failed to marshal partial block: %v", err)
+	}
+	return ctx.GetStub().PutState(partialBlockID, partialJSON)
+}
+
+func (s *SmartContract) GetPartialBlock(ctx contractapi.TransactionContextInterface, partialBlockID string) (*PartialBlock, error) {
+	partialJSON, err := ctx.GetStub().GetState(partialBlockID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read partial block %s: %v", partialBlockID, err)
+	}
+	if partialJSON == nil {
+		return nil, fmt.Errorf("partial block %s does not exist", partialBlockID)
+	}
+	var partial PartialBlock
+	if err := json.Unmarshal(partialJSON, &partial); err != nil {
+		return nil, err
+	}
+	return &partial, nil
+}
+
+// ---------- Cloud Server: assemble full block from partial block ----------
+
+// CreateFullBlock is invoked by a cloud server (CSk) after receiving ParBESRi.
+// It links to the current chain tip for hashESRi-1, computes hashESRi over the
+// block contents, and stores FulBESRi as PROPOSED pending consensus.
+func (s *SmartContract) FinalizeFullBlock(
+	ctx contractapi.TransactionContextInterface,
+	blockID string,
+	partialBlockID string,
+	nonce string,
+	signatureVerified string,
+) error {
+	exists, err := s.assetExists(ctx, blockID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("full block %s already exists", blockID)
+	}
+
+	partial, err := s.GetPartialBlock(ctx, partialBlockID)
+	if err != nil {
+		return err
+	}
+	if partial.Status == "SEALED" {
+		return fmt.Errorf("partial block %s already sealed into %s", partialBlockID, partial.FullBlockID)
+	}
+
+	verified := signatureVerified == "true"
+	if !verified {
+		return fmt.Errorf("cannot finalize block %s: signature not verified", blockID)
 	}
 
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
-		return fmt.Errorf("failed to get transaction timestamp: %v", err)
+		return fmt.Errorf("failed to get tx timestamp: %v", err)
 	}
-	timestamp := fmt.Sprintf("%d", txTimestamp.Seconds)
 
-	deviceKey := "DEVICE_" + deviceID
-	deviceJSON, err := ctx.GetStub().GetState(deviceKey)
+	full := FullBlock{
+		BlockID:           blockID,
+		Timestamp:         txTimestamp.AsTime().UTC().Format("2006-01-02T15:04:05Z"),
+		Nonce:             nonce,
+		PreviousHash:      "",
+		OwnerID:           partial.OwnerID,
+		OwnerPubKey:       partial.OwnerPubKey,
+		EncryptedTx:       partial.EncryptedTx,
+		Signature:         partial.Signature,
+		SignatureVerified: verified,
+		PartialBlockID:    partialBlockID,
+		DeviceID:          partial.DeviceID,
+		ConsensusStatus:   "PROPOSED",
+		Hash		   :   "",
+	}
+
+	fullJSON, err := json.Marshal(full)
 	if err != nil {
-		return fmt.Errorf("failed to check device registration: %v", err)
+		return fmt.Errorf("failed to marshal full block: %v", err)
 	}
-	if deviceJSON == nil {
-		return fmt.Errorf("device %s is not registered on the blockchain", deviceID)
-	}
-
-	var device Device
-	if err := json.Unmarshal(deviceJSON, &device); err != nil {
-		return fmt.Errorf("failed to unmarshal device: %v", err)
-	}
-	if !device.Active {
-		return fmt.Errorf("device %s has been deactivated and cannot submit records", deviceID)
+	if err := ctx.GetStub().PutState(blockID, fullJSON); err != nil {
+		return err
 	}
 
-	// Look up this device's current chain tip. No prior record means this
-	// is the genesis record for the device's chain.
-	latestKey := "LATEST_" + deviceID
-	prevHashBytes, err := ctx.GetStub().GetState(latestKey)
+	partial.Status = "SEALED"
+	partial.FullBlockID = blockID
+	partialJSON, err := json.Marshal(partial)
 	if err != nil {
-		return fmt.Errorf("failed to read device chain tip: %v", err)
+		return err
 	}
-	previousRecordHash := ""
-	if prevHashBytes != nil {
-		previousRecordHash = string(prevHashBytes)
-	}
-
-	record := IoTRecord{
-		TxID:               txID,
-		DeviceID:            deviceID,
-		EdgeCluster:         edgeCluster,
-		DataHash:            dataHash,
-		Timestamp:           timestamp,
-		Status:              status,
-		PreviousRecordHash:  previousRecordHash,
-	}
-	record.RecordHash = computeRecordHash(record)
-
-	recordJSON, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("failed to marshal record: %v", err)
-	}
-
-	if err := ctx.GetStub().SetEvent("SubmitRecord", recordJSON); err != nil {
-		return fmt.Errorf("failed to set event: %v", err)
-	}
-
-	if err := ctx.GetStub().PutState(key, recordJSON); err != nil {
-		return fmt.Errorf("failed to write record: %v", err)
-	}
-
-	return ctx.GetStub().PutState(latestKey, []byte(record.RecordHash))
+	return ctx.GetStub().PutState(partialBlockID, partialJSON)
 }
 
-func (s *SmartContract) GetRecord(
-	ctx contractapi.TransactionContextInterface,
-	txID string,
-) (*IoTRecord, error) {
-
-	recordJSON, err := ctx.GetStub().GetState(recordKey(txID))
+func (s *SmartContract) GetFullBlock(ctx contractapi.TransactionContextInterface, blockID string) (*FullBlock, error) {
+	blockJSON, err := ctx.GetStub().GetState(blockID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read record %s: %v", txID, err)
+		return nil, fmt.Errorf("failed to read full block %s: %v", blockID, err)
 	}
-	if recordJSON == nil {
-		return nil, fmt.Errorf("record %s does not exist", txID)
+	if blockJSON == nil {
+		return nil, fmt.Errorf("full block %s does not exist", blockID)
 	}
-
-	var record IoTRecord
-	if err := json.Unmarshal(recordJSON, &record); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal record: %v", err)
+	var full FullBlock
+	if err := json.Unmarshal(blockJSON, &full); err != nil {
+		return nil, err
 	}
-
-	return &record, nil
+	return &full, nil
 }
 
-func (s *SmartContract) GetAllRecords(
-	ctx contractapi.TransactionContextInterface,
-) ([]*IoTRecord, error) {
+// ---------- Consensus / commit ----------
 
-	iterator, err := ctx.GetStub().GetStateByRange("RECORD_", "RECORD_~")
+// CommitFullBlock is invoked by the P2PCS network leader once the standard
+// consensus procedure (proposal, voting/endorsement, ordering) has approved
+// FulBESRi. It verifies hash linkage and integrity, then advances the chain tip.
+func (s *SmartContract) CommitFullBlock(ctx contractapi.TransactionContextInterface, blockID string) error {
+	full, err := s.GetFullBlock(ctx, blockID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get state iterator: %v", err)
+		return err
+	}
+	if full.ConsensusStatus == "COMMITTED" {
+		return fmt.Errorf("full block %s is already committed", blockID)
+	}
+
+	meta, err := s.getChainMeta(ctx)
+	if err != nil {
+		return err
+	}
+
+	// verify hash chain linkage
+	full.PreviousHash = meta.LatestHash
+
+	// verify block integrity (recompute hash, ignoring the stored hash+status fields)
+	recomputed := computeBlockHash(FullBlock{
+		BlockID:           full.BlockID,
+		Timestamp:         full.Timestamp,
+		Nonce:             full.Nonce,
+		PreviousHash:      full.PreviousHash,
+		OwnerID:           full.OwnerID,
+		OwnerPubKey:       full.OwnerPubKey,
+		EncryptedTx:       full.EncryptedTx,
+		Signature:         full.Signature,
+		SignatureVerified: full.SignatureVerified,
+		PartialBlockID:    full.PartialBlockID,
+		DeviceID:          full.DeviceID,
+	})
+	full.Hash = recomputed
+
+	full.ConsensusStatus = "COMMITTED"
+	fullJSON, err := json.Marshal(full)
+	if err != nil {
+		return err
+	}
+	if err := ctx.GetStub().PutState(blockID, fullJSON); err != nil {
+		return err
+	}
+
+	meta.LatestHash = full.Hash
+	meta.LatestBlockID = full.BlockID
+	meta.Height++
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return ctx.GetStub().PutState(chainMetaKey, metaJSON)
+}
+
+// RejectFullBlock lets the P2PCS leader mark a proposed block as rejected
+// if consensus fails (e.g. insufficient endorsements/votes).
+func (s *SmartContract) RejectFullBlock(ctx contractapi.TransactionContextInterface, blockID string) error {
+	full, err := s.GetFullBlock(ctx, blockID)
+	if err != nil {
+		return err
+	}
+	if full.ConsensusStatus == "COMMITTED" {
+		return fmt.Errorf("cannot reject block %s: already committed", blockID)
+	}
+	full.ConsensusStatus = "REJECTED"
+	fullJSON, err := json.Marshal(full)
+	if err != nil {
+		return err
+	}
+	return ctx.GetStub().PutState(blockID, fullJSON)
+}
+
+// ---------- Queries ----------
+
+func (s *SmartContract) GetChainMeta(ctx contractapi.TransactionContextInterface) (*ChainMeta, error) {
+	return s.getChainMeta(ctx)
+}
+
+// GetAllFullBlocks returns all full blocks (partial and complete state) for audit/UI use.
+func (s *SmartContract) GetAllFullBlocks(ctx contractapi.TransactionContextInterface) ([]*FullBlock, error) {
+	iterator, err := ctx.GetStub().GetStateByRange("", "")
+	if err != nil {
+		return nil, err
 	}
 	defer iterator.Close()
 
-	var records []*IoTRecord
-
+	var blocks []*FullBlock
 	for iterator.HasNext() {
-		result, err := iterator.Next()
-		if err != nil {
-			return nil, fmt.Errorf("failed to iterate records: %v", err)
-		}
-
-		var record IoTRecord
-		if err := json.Unmarshal(result.Value, &record); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal record: %v", err)
-		}
-
-		records = append(records, &record)
-	}
-
-	return records, nil
-}
-
-func (s *SmartContract) VerifyHash(
-	ctx contractapi.TransactionContextInterface,
-	txID string,
-	hash string,
-) (bool, error) {
-
-	record, err := s.GetRecord(ctx, txID)
-	if err != nil {
-		return false, err
-	}
-
-	return record.DataHash == hash, nil
-}
-
-type ChainVerificationResult struct {
-	DeviceID     string `json:"deviceId"`
-	Valid        bool   `json:"valid"`
-	RecordsCheck int    `json:"recordsChecked"`
-	BrokenAtTxID string `json:"brokenAtTxId,omitempty" metadata:",optional"`
-	Reason       string `json:"reason,omitempty" metadata:",optional"`
-}
-
-func (s *SmartContract) VerifyChain(
-	ctx contractapi.TransactionContextInterface,
-	deviceID string,
-) (*ChainVerificationResult, error) {
-
-	all, err := s.GetAllRecords(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load records: %v", err)
-	}
-
-	var chain []*IoTRecord
-	for _, r := range all {
-		if r.DeviceID == deviceID {
-			chain = append(chain, r)
-		}
-	}
-
-	result := &ChainVerificationResult{DeviceID: deviceID}
-
-	if len(chain) == 0 {
-		result.Valid = false
-		result.Reason = "no records found for device"
-		return result, nil
-	}
-
-	byPrevHash := make(map[string]*IoTRecord, len(chain))
-	var genesis *IoTRecord
-	genesisCount := 0
-	for _, r := range chain {
-		if r.PreviousRecordHash == "" {
-			genesis = r
-			genesisCount++
-		} else {
-			if _, exists := byPrevHash[r.PreviousRecordHash]; exists {
-				result.Valid = false
-				result.Reason = "two records share the same PreviousRecordHash — chain forked (likely concurrent writes without proper serialization)"
-				return result, nil
-			}
-			byPrevHash[r.PreviousRecordHash] = r
-		}
-	}
-	if genesisCount != 1 {
-		result.Valid = false
-		result.Reason = fmt.Sprintf("expected exactly 1 genesis record, found %d", genesisCount)
-		return result, nil
-	}
-
-	ordered := []*IoTRecord{genesis}
-	cur := genesis
-	for len(ordered) < len(chain) {
-		next, ok := byPrevHash[cur.RecordHash]
-		if !ok {
-			result.Valid = false
-			result.BrokenAtTxID = cur.TxID
-			result.Reason = "no record found linking to this hash — chain is broken or incomplete"
-			return result, nil
-		}
-		ordered = append(ordered, next)
-		cur = next
-	}
-
-	for _, r := range ordered {
-		result.RecordsCheck++
-		recomputed := computeRecordHash(IoTRecord{
-			TxID:               r.TxID,
-			DeviceID:           r.DeviceID,
-			EdgeCluster:        r.EdgeCluster,
-			DataHash:           r.DataHash,
-			Timestamp:          r.Timestamp,
-			Status:             r.Status,
-			PreviousRecordHash: r.PreviousRecordHash,
-		})
-		if recomputed != r.RecordHash {
-			result.Valid = false
-			result.BrokenAtTxID = r.TxID
-			result.Reason = "stored RecordHash does not match recomputed hash — record contents were altered after submission"
-			return result, nil
-		}
-	}
-
-	result.Valid = true
-	return result, nil
-}
-
-// SubmitBatch allows edge nodes to submit multiple IoT records in one transaction
-func (s *SmartContract) SubmitBatch(
-	ctx contractapi.TransactionContextInterface,
-	recordsJSON string,
-) error {
-
-	var records []IoTRecord
-	if err := json.Unmarshal([]byte(recordsJSON), &records); err != nil {
-		return fmt.Errorf("failed to parse batch records: %v", err)
-	}
-	if len(records) == 0 {
-		return fmt.Errorf("batch must contain at least one record")
-	}
-
-	txTime, err := ctx.GetStub().GetTxTimestamp()
-	if err != nil {
-		return fmt.Errorf("failed to get timestamp: %v", err)
-	}
-	timestamp := fmt.Sprintf("%d", txTime.Seconds)
-
-	seen := make(map[string]bool, len(records))
-	chainTips := make(map[string]string)
-
-	for _, record := range records {
-		if seen[record.TxID] {
-			return fmt.Errorf("duplicate txID %s within batch", record.TxID)
-		}
-		seen[record.TxID] = true
-
-		record.Timestamp = timestamp
-
-		key := recordKey(record.TxID)
-		existing, err := ctx.GetStub().GetState(key)
-		if err != nil {
-			return fmt.Errorf("failed to read ledger for %s: %v", record.TxID, err)
-		}
-		if existing != nil {
-			return fmt.Errorf("record %s already exists", record.TxID)
-		}
-
-		prevHash, inBatch := chainTips[record.DeviceID]
-		if !inBatch {
-			latestKey := "LATEST_" + record.DeviceID
-			prevHashBytes, err := ctx.GetStub().GetState(latestKey)
-			if err != nil {
-				return fmt.Errorf("failed to read chain tip for %s: %v", record.DeviceID, err)
-			}
-			if prevHashBytes != nil {
-				prevHash = string(prevHashBytes)
-			}
-		}
-
-		record.PreviousRecordHash = prevHash
-		record.RecordHash = computeRecordHash(record)
-		chainTips[record.DeviceID] = record.RecordHash
-
-		recordJSON, err := json.Marshal(record)
-		if err != nil {
-			return fmt.Errorf("failed to marshal record %s: %v", record.TxID, err)
-		}
-
-		if err := ctx.GetStub().PutState(key, recordJSON); err != nil {
-			return fmt.Errorf("failed to write record %s: %v", record.TxID, err)
-		}
-	}
-
-	for deviceID, tipHash := range chainTips {
-		latestKey := "LATEST_" + deviceID
-		if err := ctx.GetStub().PutState(latestKey, []byte(tipHash)); err != nil {
-			return fmt.Errorf("failed to update chain tip for %s: %v", deviceID, err)
-		}
-	}
-
-	batchEvent := map[string]int{"recordsSubmitted": len(records)}
-	batchJSON, err := json.Marshal(batchEvent)
-	if err != nil {
-		return fmt.Errorf("failed to marshal batch event: %v", err)
-	}
-	return ctx.GetStub().SetEvent("BatchSubmitted", batchJSON)
-}
-
-// RaiseAlert writes an IDS anomaly alert immutably to the blockchain
-func (s *SmartContract) RaiseAlert(
-	ctx contractapi.TransactionContextInterface,
-	alertID string,
-	txID string,
-	deviceID string,
-	severity string,
-	description string,
-	flaggedBy string,
-) error {
-
-	key := "ALERT_" + alertID
-	existing, err := ctx.GetStub().GetState(key)
-	if err != nil {
-		return fmt.Errorf("failed to read ledger: %v", err)
-	}
-	if existing != nil {
-		return fmt.Errorf("alert %s already exists", alertID)
-	}
-
-	txTime, err := ctx.GetStub().GetTxTimestamp()
-	if err != nil {
-		return fmt.Errorf("failed to get timestamp: %v", err)
-	}
-	timestamp := fmt.Sprintf("%d", txTime.Seconds)
-
-	alert := struct {
-		AlertID     string `json:"alertId"`
-		TxID        string `json:"txId"`
-		DeviceID    string `json:"deviceId"`
-		Severity    string `json:"severity"`
-		Description string `json:"description"`
-		FlaggedBy   string `json:"flaggedBy"`
-		Timestamp   string `json:"timestamp"`
-		Resolved    bool   `json:"resolved"`
-	}{
-		AlertID:     alertID,
-		TxID:        txID,
-		DeviceID:    deviceID,
-		Severity:    severity,
-		Description: description,
-		FlaggedBy:   flaggedBy,
-		Timestamp:   timestamp,
-		Resolved:    false,
-	}
-
-	alertJSON, err := json.Marshal(alert)
-	if err != nil {
-		return fmt.Errorf("failed to marshal alert: %v", err)
-	}
-
-	if err := ctx.GetStub().SetEvent("AnomalyAlert", alertJSON); err != nil {
-		return fmt.Errorf("failed to set event: %v", err)
-	}
-
-	if txID != "" {
-		rKey := recordKey(txID)
-		recordJSON, err := ctx.GetStub().GetState(rKey)
-		if err == nil && recordJSON != nil {
-			var record IoTRecord
-			if json.Unmarshal(recordJSON, &record) == nil {
-				record.Status = "flagged"
-				updated, _ := json.Marshal(record)
-				ctx.GetStub().PutState(rKey, updated)
-			}
-		}
-	}
-
-	return ctx.GetStub().PutState(key, alertJSON)
-}
-
-// GetAlertsForDevice returns all alerts for a specific device
-func (s *SmartContract) GetAlertsForDevice(
-	ctx contractapi.TransactionContextInterface,
-	deviceID string,
-) ([]*struct {
-	AlertID     string `json:"alertId"`
-	TxID        string `json:"txId"`
-	DeviceID    string `json:"deviceId"`
-	Severity    string `json:"severity"`
-	Description string `json:"description"`
-	FlaggedBy   string `json:"flaggedBy"`
-	Timestamp   string `json:"timestamp"`
-	Resolved    bool   `json:"resolved"`
-}, error) {
-	iterator, err := ctx.GetStub().GetStateByRange("ALERT_", "ALERT_~")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get alerts: %v", err)
-	}
-	defer iterator.Close()
-
-	var alerts []*struct {
-		AlertID     string `json:"alertId"`
-		TxID        string `json:"txId"`
-		DeviceID    string `json:"deviceId"`
-		Severity    string `json:"severity"`
-		Description string `json:"description"`
-		FlaggedBy   string `json:"flaggedBy"`
-		Timestamp   string `json:"timestamp"`
-		Resolved    bool   `json:"resolved"`
-	}
-
-	for iterator.HasNext() {
-		result, err := iterator.Next()
+		item, err := iterator.Next()
 		if err != nil {
 			return nil, err
 		}
-		var alert struct {
-			AlertID     string `json:"alertId"`
-			TxID        string `json:"txId"`
-			DeviceID    string `json:"deviceId"`
-			Severity    string `json:"severity"`
-			Description string `json:"description"`
-			FlaggedBy   string `json:"flaggedBy"`
-			Timestamp   string `json:"timestamp"`
-			Resolved    bool   `json:"resolved"`
+		var full FullBlock
+		if err := json.Unmarshal(item.Value, &full); err != nil {
+			continue // skip non-FullBlock records (partial blocks, chain meta)
 		}
-		if err := json.Unmarshal(result.Value, &alert); err == nil {
-			if alert.DeviceID == deviceID {
-				alerts = append(alerts, &alert)
-			}
+		if full.BlockID != "" {
+			blocks = append(blocks, &full)
 		}
 	}
-	return alerts, nil
+	return blocks, nil
 }
 
-func (s *SmartContract) ChallengeRecord(
-	ctx contractapi.TransactionContextInterface,
-	challengeID string,
-	txID string,
-	reason string,
-) error {
+// ---------- Helpers ----------
 
-	recordJSON, err := ctx.GetStub().GetState(recordKey(txID))
+func (s *SmartContract) assetExists(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
+	assetJSON, err := ctx.GetStub().GetState(id)
 	if err != nil {
-		return fmt.Errorf("failed to read record: %v", err)
+		return false, fmt.Errorf("failed to read from world state: %v", err)
 	}
-	if recordJSON == nil {
-		return fmt.Errorf("record %s does not exist", txID)
-	}
-
-	key := "CHALLENGE_" + challengeID
-	existing, err := ctx.GetStub().GetState(key)
-	if err != nil {
-		return fmt.Errorf("failed to read ledger: %v", err)
-	}
-	if existing != nil {
-		return fmt.Errorf("challenge %s already exists", challengeID)
-	}
-
-	clientMSP, err := ctx.GetClientIdentity().GetMSPID()
-	if err != nil {
-		return fmt.Errorf("failed to get client MSP: %v", err)
-	}
-
-	txTime, err := ctx.GetStub().GetTxTimestamp()
-	if err != nil {
-		return fmt.Errorf("failed to get timestamp: %v", err)
-	}
-	timestamp := fmt.Sprintf("%d", txTime.Seconds)
-
-	challenge := RecordChallenge{
-		ChallengeID:    challengeID,
-		TxID:           txID,
-		ChallengingOrg: clientMSP,
-		Reason:         reason,
-		Status:         "open",
-		Timestamp:      timestamp,
-		Resolution:     "",
-	}
-
-	challengeJSON, err := json.Marshal(challenge)
-	if err != nil {
-		return fmt.Errorf("failed to marshal challenge: %v", err)
-	}
-
-	ctx.GetStub().SetEvent("RecordChallenged", challengeJSON)
-
-	return ctx.GetStub().PutState(key, challengeJSON)
+	return assetJSON != nil, nil
 }
 
-// ResolveChallenge closes a challenge with a resolution
-func (s *SmartContract) ResolveChallenge(
-	ctx contractapi.TransactionContextInterface,
-	challengeID string,
-	resolution string,
-) error {
-
-	key := "CHALLENGE_" + challengeID
-	challengeJSON, err := ctx.GetStub().GetState(key)
+func (s *SmartContract) getChainMeta(ctx contractapi.TransactionContextInterface) (*ChainMeta, error) {
+	metaJSON, err := ctx.GetStub().GetState(chainMetaKey)
 	if err != nil {
-		return fmt.Errorf("failed to read challenge: %v", err)
+		return nil, fmt.Errorf("failed to read chain meta: %v", err)
 	}
-	if challengeJSON == nil {
-		return fmt.Errorf("challenge %s does not exist", challengeID)
+	if metaJSON == nil {
+		return nil, fmt.Errorf("ledger not initialized: call InitLedger first")
 	}
-
-	var challenge RecordChallenge
-	err = json.Unmarshal(challengeJSON, &challenge)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal challenge: %v", err)
+	var meta ChainMeta
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return nil, err
 	}
-
-	if challenge.Status == "resolved" {
-		return fmt.Errorf("challenge %s is already resolved", challengeID)
-	}
-
-	challenge.Status = "resolved"
-	challenge.Resolution = resolution
-
-	updated, err := json.Marshal(challenge)
-	if err != nil {
-		return fmt.Errorf("failed to marshal updated challenge: %v", err)
-	}
-
-	return ctx.GetStub().PutState(key, updated)
+	return &meta, nil
 }
 
-// GetChallengesForRecord returns all challenges raised against a record
-func (s *SmartContract) GetChallengesForRecord(
-	ctx contractapi.TransactionContextInterface,
-	txID string,
-) ([]*RecordChallenge, error) {
-
-	iterator, err := ctx.GetStub().GetStateByRange("CHALLENGE_", "CHALLENGE_~")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get challenges: %v", err)
-	}
-	defer iterator.Close()
-
-	var challenges []*RecordChallenge
-
-	for iterator.HasNext() {
-		result, err := iterator.Next()
-		if err != nil {
-			return nil, err
-		}
-		var challenge RecordChallenge
-		if err := json.Unmarshal(result.Value, &challenge); err == nil {
-			if challenge.TxID == txID {
-				challenges = append(challenges, &challenge)
-			}
-		}
-	}
-
-	return challenges, nil
-}
-
-// GetAllChallenges returns every challenge across all records
-func (s *SmartContract) GetAllChallenges(
-	ctx contractapi.TransactionContextInterface,
-) ([]*RecordChallenge, error) {
-
-	iterator, err := ctx.GetStub().GetStateByRange("CHALLENGE_", "CHALLENGE_~")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get challenges: %v", err)
-	}
-	defer iterator.Close()
-
-	var challenges []*RecordChallenge
-
-	for iterator.HasNext() {
-		result, err := iterator.Next()
-		if err != nil {
-			return nil, err
-		}
-		var challenge RecordChallenge
-		if err := json.Unmarshal(result.Value, &challenge); err == nil {
-			challenges = append(challenges, &challenge)
-		}
-	}
-
-	return challenges, nil
-}
-
-// UpdateRecordStatus enforces valid state transitions on IoT records
-func (s *SmartContract) UpdateRecordStatus(
-	ctx contractapi.TransactionContextInterface,
-	txID string,
-	newStatus string,
-) error {
-
-	validTransitions := map[string][]string{
-		"confirmed": {"validated"},
-		"submitted": {"validated"},
-		"validated": {"approved", "flagged"},
-		"approved":  {"archived"},
-		"flagged":   {"resolved"},
-		"resolved":  {"archived"},
-	}
-
-	key := recordKey(txID)
-	recordJSON, err := ctx.GetStub().GetState(key)
-	if err != nil {
-		return fmt.Errorf("failed to read record %s: %v", txID, err)
-	}
-	if recordJSON == nil {
-		return fmt.Errorf("record %s does not exist", txID)
-	}
-
-	var record IoTRecord
-	if err := json.Unmarshal(recordJSON, &record); err != nil {
-		return fmt.Errorf("failed to unmarshal record: %v", err)
-	}
-
-	allowedStatuses, exists := validTransitions[record.Status]
-	if !exists {
-		return fmt.Errorf("record %s has unknown status: %s", txID, record.Status)
-	}
-
-	valid := false
-	for _, allowed := range allowedStatuses {
-		if allowed == newStatus {
-			valid = true
-			break
-		}
-	}
-
-	if !valid {
-		return fmt.Errorf(
-			"invalid transition for record %s: %s -> %s (allowed: %v)",
-			txID, record.Status, newStatus, allowedStatuses,
-		)
-	}
-
-	record.Status = newStatus
-
-	updated, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("failed to marshal updated record: %v", err)
-	}
-
-	if err := ctx.GetStub().SetEvent("RecordStatusUpdated", updated); err != nil {
-		return fmt.Errorf("failed to set event: %v", err)
-	}
-
-	return ctx.GetStub().PutState(key, updated)
-}
-
-// RegisterDevice registers an IoT device on the blockchain
-func (s *SmartContract) RegisterDevice(
-	ctx contractapi.TransactionContextInterface,
-	deviceID string,
-	deviceType string,
-	edgeCluster string,
-	orgMSP string,
-) error {
-
-	key := "DEVICE_" + deviceID
-	existing, err := ctx.GetStub().GetState(key)
-	if err != nil {
-		return fmt.Errorf("failed to read ledger: %v", err)
-	}
-	if existing != nil {
-		return fmt.Errorf("device %s is already registered", deviceID)
-	}
-
-	device := Device{
-		DeviceID:    deviceID,
-		DeviceType:  deviceType,
-		EdgeCluster: edgeCluster,
-		OrgMSP:      orgMSP,
-		Active:      true,
-	}
-
-	deviceJSON, err := json.Marshal(device)
-	if err != nil {
-		return fmt.Errorf("failed to marshal device: %v", err)
-	}
-
-	ctx.GetStub().SetEvent("DeviceRegistered", deviceJSON)
-	return ctx.GetStub().PutState(key, deviceJSON)
-}
-
-// DeactivateDevice marks a device as inactive — called by IDS when malicious
-func (s *SmartContract) DeactivateDevice(
-	ctx contractapi.TransactionContextInterface,
-	deviceID string,
-	reason string,
-) error {
-
-	key := "DEVICE_" + deviceID
-	deviceJSON, err := ctx.GetStub().GetState(key)
-	if err != nil {
-		return fmt.Errorf("failed to read device: %v", err)
-	}
-	if deviceJSON == nil {
-		return fmt.Errorf("device %s is not registered", deviceID)
-	}
-
-	var device Device
-	err = json.Unmarshal(deviceJSON, &device)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal device: %v", err)
-	}
-
-	device.Active = false
-
-	updated, err := json.Marshal(device)
-	if err != nil {
-		return fmt.Errorf("failed to marshal device: %v", err)
-	}
-
-	ctx.GetStub().SetEvent("DeviceDeactivated", updated)
-	return ctx.GetStub().PutState(key, updated)
-}
-
-// GetDevice returns a registered device by ID
-func (s *SmartContract) GetDevice(
-	ctx contractapi.TransactionContextInterface,
-	deviceID string,
-) (*Device, error) {
-
-	key := "DEVICE_" + deviceID
-	deviceJSON, err := ctx.GetStub().GetState(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read device: %v", err)
-	}
-	if deviceJSON == nil {
-		return nil, fmt.Errorf("device %s is not registered", deviceID)
-	}
-
-	var device Device
-	err = json.Unmarshal(deviceJSON, &device)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal device: %v", err)
-	}
-
-	return &device, nil
-}
-
-// GetAllDevices returns all registered devices
-func (s *SmartContract) GetAllDevices(
-	ctx contractapi.TransactionContextInterface,
-) ([]*Device, error) {
-
-	iterator, err := ctx.GetStub().GetStateByRange("DEVICE_", "DEVICE_~")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get devices: %v", err)
-	}
-	defer iterator.Close()
-
-	var devices []*Device
-
-	for iterator.HasNext() {
-		result, err := iterator.Next()
-		if err != nil {
-			return nil, err
-		}
-		var device Device
-		if err := json.Unmarshal(result.Value, &device); err == nil {
-			devices = append(devices, &device)
-		}
-	}
-
-	return devices, nil
-}
-
-func (s *SmartContract) GetRecordHistory(
-	ctx contractapi.TransactionContextInterface,
-	txID string,
-) (string, error) {
-
-	iterator, err := ctx.GetStub().GetHistoryForKey(recordKey(txID))
-	if err != nil {
-		return "", fmt.Errorf("failed to get history: %v", err)
-	}
-	defer iterator.Close()
-
-	type HistoryEntry struct {
-		TxID      string    `json:"txId"`
-		Value     IoTRecord `json:"value"`
-		Timestamp string    `json:"timestamp"`
-		IsDelete  bool      `json:"isDelete"`
-	}
-
-	var history []HistoryEntry
-
-	for iterator.HasNext() {
-		result, err := iterator.Next()
-		if err != nil {
-			return "", err
-		}
-
-		var record IoTRecord
-		if !result.IsDelete {
-			json.Unmarshal(result.Value, &record)
-		}
-
-		history = append(history, HistoryEntry{
-			TxID:      result.TxId,
-			Value:     record,
-			Timestamp: fmt.Sprintf("%d", result.Timestamp.Seconds),
-			IsDelete:  result.IsDelete,
-		})
-	}
-
-	historyJSON, err := json.Marshal(history)
-	if err != nil {
-		return "", err
-	}
-
-	return string(historyJSON), nil
+// computeBlockHash derives hashESRi deterministically from block contents,
+// including hashESRi-1 so tampering with any prior block invalidates the chain.
+func computeBlockHash(f FullBlock) string {
+	payload := f.BlockID + f.Timestamp + f.Nonce + f.PreviousHash +
+		f.OwnerID + f.OwnerPubKey + f.EncryptedTx + f.Signature +
+		f.PartialBlockID + f.DeviceID
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
 }
