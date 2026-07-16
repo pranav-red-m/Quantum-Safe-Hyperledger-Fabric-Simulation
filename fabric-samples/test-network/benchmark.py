@@ -1,90 +1,298 @@
-import argparse,csv,json,os,statistics,subprocess,time,uuid
-from dataclasses import dataclass,field
+import argparse, csv, json, os, statistics, subprocess, time, uuid
+from dataclasses import dataclass, field
 
-TEST_NETWORK_DIR=os.path.expanduser("~/testingmultpeers/fabric-samples/test-network")
-ORG_BASE=os.path.join(TEST_NETWORK_DIR,"organizations")
-FABRIC_BIN_DIR=os.path.expanduser("~/testingmultpeers/fabric-samples/bin")
-FABRIC_CFG_PATH=os.path.expanduser("~/testingmultpeers/fabric-samples/config")
-CHANNEL="mychannel"
-CC_NAME="iotcc"
-ORDERER_ADDR="localhost:7050"
-ORDERER_TLS_HOSTNAME="orderer.example.com"
-ORDERER_CA=os.path.join(ORG_BASE,"ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem")
-PEERS=[
-("localhost:7051",os.path.join(ORG_BASE,"peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt")),
-("localhost:9051",os.path.join(ORG_BASE,"peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt")),
+TEST_NETWORK_DIRECTORY = os.path.expanduser("~/testingmultpeers/fabric-samples/test-network")
+ORGANIZATION_BASE = os.path.join(TEST_NETWORK_DIRECTORY, "organizations")
+FABRIC_BINARY_DIRECTORY = os.path.expanduser("~/testingmultpeers/fabric-samples/bin")
+FABRIC_CONFIG_PATH = os.path.expanduser("~/testingmultpeers/fabric-samples/config")
+CHANNEL_NAME = "mychannel"
+CHAINCODE_NAME = "iotcc"
+ORDERER_ADDRESS = "localhost:7050"
+ORDERER_TLS_HOSTNAME = "orderer.example.com"
+ORDERER_CERTIFICATE_AUTHORITY = os.path.join(
+    ORGANIZATION_BASE,
+    "ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem",
+)
+PEERS = [
+    ("localhost:7051", os.path.join(ORGANIZATION_BASE, "peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt")),
+    ("localhost:9051", os.path.join(ORGANIZATION_BASE, "peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt")),
 ]
-CORE_PEER_LOCALMSPID="Org1MSP"
-CORE_PEER_TLS_ROOTCERT_FILE=os.path.join(ORG_BASE,"peerOrganizations/org1.example.com/tlsca/tlsca.org1.example.com-cert.pem")
-CORE_PEER_MSPCONFIGPATH=os.path.join(ORG_BASE,"peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp")
-CORE_PEER_ADDRESS="localhost:7051"
+CORE_PEER_LOCAL_MSP_ID = "Org1MSP"
+CORE_PEER_TLS_ROOT_CERTIFICATE_FILE = os.path.join(ORGANIZATION_BASE, "peerOrganizations/org1.example.com/tlsca/tlsca.org1.example.com-cert.pem")
+CORE_PEER_MSP_CONFIG_PATH = os.path.join(ORGANIZATION_BASE, "peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp")
+CORE_PEER_ADDRESS = "localhost:7051"
 
-def env():
- e=os.environ.copy();e["FABRIC_CFG_PATH"]=FABRIC_CFG_PATH;e["PATH"]=FABRIC_BIN_DIR+os.pathsep+e.get("PATH","");e["CORE_PEER_TLS_ENABLED"]="true";e["CORE_PEER_LOCALMSPID"]=CORE_PEER_LOCALMSPID;e["CORE_PEER_TLS_ROOTCERT_FILE"]=CORE_PEER_TLS_ROOTCERT_FILE;e["CORE_PEER_MSPCONFIGPATH"]=CORE_PEER_MSPCONFIGPATH;e["CORE_PEER_ADDRESS"]=CORE_PEER_ADDRESS;return e
-def invoke(fn,args):
- cmd=["peer","chaincode","invoke","-o",ORDERER_ADDR,"--ordererTLSHostnameOverride",ORDERER_TLS_HOSTNAME,"--tls","--cafile",ORDERER_CA,"-C",CHANNEL,"-n",CC_NAME,"--waitForEvent"]
- for a,c in PEERS: cmd+=["--peerAddresses",a,"--tlsRootCertFiles",c]
- cmd+=["-c",json.dumps({"function":fn,"Args":args})]
- s=time.perf_counter();r=subprocess.run(cmd,capture_output=True,text=True,env=env());t=(time.perf_counter()-s)*1000
- if r.returncode: raise RuntimeError(r.stderr.strip())
- return t
-def query(fn,args):
- cmd=["peer","chaincode","query","-C",CHANNEL,"-n",CC_NAME,"-c",json.dumps({"function":fn,"Args":args})]
- s=time.perf_counter();r=subprocess.run(cmd,capture_output=True,text=True,env=env());t=(time.perf_counter()-s)*1000
- if r.returncode: raise RuntimeError(r.stderr.strip())
- return t,r.stdout
+
+def build_environment():
+    environment = os.environ.copy()
+    environment["FABRIC_CFG_PATH"] = FABRIC_CONFIG_PATH
+    environment["PATH"] = FABRIC_BINARY_DIRECTORY + os.pathsep + environment.get("PATH", "")
+    environment["CORE_PEER_TLS_ENABLED"] = "true"
+    environment["CORE_PEER_LOCALMSPID"] = CORE_PEER_LOCAL_MSP_ID
+    environment["CORE_PEER_TLS_ROOTCERT_FILE"] = CORE_PEER_TLS_ROOT_CERTIFICATE_FILE
+    environment["CORE_PEER_MSPCONFIGPATH"] = CORE_PEER_MSP_CONFIG_PATH
+    environment["CORE_PEER_ADDRESS"] = CORE_PEER_ADDRESS
+    return environment
+
+
+def invoke_chaincode(function_name, arguments):
+    command = [
+        "peer", "chaincode", "invoke",
+        "-o", ORDERER_ADDRESS,
+        "--ordererTLSHostnameOverride", ORDERER_TLS_HOSTNAME,
+        "--tls", "--cafile", ORDERER_CERTIFICATE_AUTHORITY,
+        "-C", CHANNEL_NAME, "-n", CHAINCODE_NAME,
+        "--waitForEvent",
+    ]
+    for address, certificate in PEERS:
+        command += ["--peerAddresses", address, "--tlsRootCertFiles", certificate]
+    command += ["-c", json.dumps({"function": function_name, "Args": arguments})]
+
+    start_time = time.perf_counter()
+    result = subprocess.run(command, capture_output=True, text=True, env=build_environment())
+    elapsed_milliseconds = (time.perf_counter() - start_time) * 1000
+
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip())
+    return elapsed_milliseconds
+
+
+def query_chaincode(function_name, arguments):
+    command = [
+        "peer", "chaincode", "query",
+        "-C", CHANNEL_NAME, "-n", CHAINCODE_NAME,
+        "-c", json.dumps({"function": function_name, "Args": arguments}),
+    ]
+
+    start_time = time.perf_counter()
+    result = subprocess.run(command, capture_output=True, text=True, env=build_environment())
+    elapsed_milliseconds = (time.perf_counter() - start_time) * 1000
+
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip())
+    return elapsed_milliseconds, result.stdout
+
 
 @dataclass
-class Result:
- name:str
- lat:list=field(default_factory=list)
- fail:int=0
- def add(self,v): self.lat.append(v)
- def summary(self):
-  d=sorted(self.lat);n=len(d)
-  if not n:return {}
-  return dict(min=min(d),max=max(d),mean=statistics.mean(d),median=statistics.median(d),
-              p95=d[min(int(.95*(n-1)),n-1)],p99=d[min(int(.99*(n-1)),n-1)],stdev=statistics.pstdev(d) if n>1 else 0)
+class TestResult:
+    name: str
+    latencies: list = field(default_factory=list)
+    failures: int = 0
 
-def build():
- run=uuid.uuid4().hex[:8];pbs={};fbs={}
- def submit(i):
-  pid = f"PB-{uuid.uuid4().hex}"
-  dev = f"DEV-{uuid.uuid4().hex[:8]}"
-  t=invoke("SubmitPartialBlock",[pid,"Owner1","PubKey","EncryptedTx","Signature","EdgeA",dev]);pbs[i]=pid;return t
- def finalize(i):
-  if i not in pbs: submit(i)
-  bid = f"FB-{uuid.uuid4().hex}"
-  t=invoke("FinalizeFullBlock",[bid,pbs[i],str(i),"true"]);fbs[i]=bid;return t
- def commit(i):
-  if i not in fbs: finalize(i)
-  return invoke("CommitFullBlock",[fbs[i]])
- def gp(i): return query("GetPartialBlock",[pbs[i]])[0]
- def gf(i): return query("GetFullBlock",[fbs[i]])[0]
- def gall(i): return query("GetAllFullBlocks",[])[0]
- def meta(i): return query("GetChainMeta",[])[0]
- def e2e(i): return submit(i)+finalize(i)+commit(i)
- return {"submit":submit,"finalize":finalize,"commit":commit,"get_partial":gp,"get_full":gf,"get_all":gall,"meta":meta,"e2e":e2e}
+    def add(self, value):
+        self.latencies.append(value)
 
-if __name__=="__main__":
- ap=argparse.ArgumentParser()
- ap.add_argument("--iterations",type=int,default=20)
- ap.add_argument("--csv")
- ap.add_argument("--functions",nargs="+",default=["submit","finalize","commit","get_partial","get_full","get_all","meta","e2e"])
- a=ap.parse_args()
- calls=build();rows=[]
- for fn in a.functions:
-  r=Result(fn);print(f"\n== {fn} ==")
-  for i in range(a.iterations):
-   try:
-    x=calls[fn](i);r.add(x);rows.append((fn,i,x));print(i+1,round(x,2),"ms")
-   except Exception as e:
-    r.fail+=1;rows.append((fn,i,"ERROR"))
-    print("FAIL",e)
-  s=r.summary()
-  if s:
-   print(f"mean={s['mean']:.2f} median={s['median']:.2f} p95={s['p95']:.2f} max={s['max']:.2f} stdev={s['stdev']:.2f}")
- if a.csv:
-  with open(a.csv,"w",newline="") as f:
-   csv.writer(f).writerows([["function","iteration","latency_ms"],*rows])
-  print("CSV written:",a.csv)
+    def summary(self):
+        sorted_latencies = sorted(self.latencies)
+        count = len(sorted_latencies)
+        if not count:
+            return {}
+        return dict(
+            minimum=min(sorted_latencies),
+            maximum=max(sorted_latencies),
+            mean=statistics.mean(sorted_latencies),
+            median=statistics.median(sorted_latencies),
+            percentile_95=sorted_latencies[min(int(0.95 * (count - 1)), count - 1)],
+            percentile_99=sorted_latencies[min(int(0.99 * (count - 1)), count - 1)],
+            standard_deviation=statistics.pstdev(sorted_latencies) if count > 1 else 0,
+        )
+
+
+def build_test_functions():
+    partial_block_ids = {}
+    full_block_ids = {}
+    rejected_full_block_ids = {}
+
+    def initialize_ledger(index):
+        print("Testing function: InitLedger")
+        print("  Creating the genesis block and setting up the ledger.")
+        return invoke_chaincode("InitLedger", [])
+
+    def submit_partial_block(index):
+        print("Testing function: SubmitPartialBlock")
+        partial_block_id = f"PARTIAL-BLOCK-{uuid.uuid4().hex}"
+        device_id = f"DEVICE-{uuid.uuid4().hex[:8]}"
+        edge_cluster = f"Edge{index % 3 + 1}"
+        print(f"  Submitting partial block '{partial_block_id}' from device '{device_id}' through edge cluster '{edge_cluster}'.")
+        elapsed_milliseconds = invoke_chaincode(
+            "SubmitPartialBlock",
+            [partial_block_id, f"Owner{index}", f"PublicKey{index}", f"EncryptedTransaction{index}", f"Signature{index}", edge_cluster, device_id],
+        )
+        partial_block_ids[index] = partial_block_id
+        return elapsed_milliseconds
+
+    def finalize_full_block(index):
+        print("Testing function: FinalizeFullBlock")
+        if index not in partial_block_ids:
+            submit_partial_block(index)
+        full_block_id = f"FULL-BLOCK-{uuid.uuid4().hex}"
+        random_nonce = uuid.uuid4().hex[:8]
+        print(f"  Finalizing full block '{full_block_id}' from partial block '{partial_block_ids[index]}'.")
+        elapsed_milliseconds = invoke_chaincode(
+            "FinalizeFullBlock",
+            [full_block_id, partial_block_ids[index], random_nonce, "true"],
+        )
+        full_block_ids[index] = full_block_id
+        return elapsed_milliseconds
+
+    def commit_full_block(index):
+        print("Testing function: CommitFullBlock")
+        if index not in full_block_ids:
+            finalize_full_block(index)
+        print(f"  Committing full block '{full_block_ids[index]}' to the blockchain.")
+        return invoke_chaincode("CommitFullBlock", [full_block_ids[index]])
+
+    def reject_full_block(index):
+        print("Testing function: RejectFullBlock")
+        submit_partial_block(index)
+        finalize_full_block(index)
+        full_block_id = full_block_ids[index]
+        print(f"  Rejecting full block '{full_block_id}' because consensus failed.")
+        elapsed_milliseconds = invoke_chaincode("RejectFullBlock", [full_block_id])
+        rejected_full_block_ids[index] = full_block_id
+        return elapsed_milliseconds
+
+    def get_partial_block(index):
+        print("Testing function: GetPartialBlock")
+        if index not in partial_block_ids:
+            submit_partial_block(index)
+        print(f"  Retrieving partial block '{partial_block_ids[index]}'.")
+        return query_chaincode("GetPartialBlock", [partial_block_ids[index]])[0]
+
+    def get_full_block(index):
+        print("Testing function: GetFullBlock")
+        if index not in full_block_ids:
+            finalize_full_block(index)
+        print(f"  Retrieving full block '{full_block_ids[index]}'.")
+        return query_chaincode("GetFullBlock", [full_block_ids[index]])[0]
+
+    def get_all_full_blocks(index):
+        print("Testing function: GetAllFullBlocks")
+        print("  Retrieving every full block currently stored on the ledger.")
+        return query_chaincode("GetAllFullBlocks", [])[0]
+
+    def get_chain_metadata(index):
+        print("Testing function: GetChainMeta")
+        print("  Retrieving the current blockchain metadata, including height and latest hash.")
+        return query_chaincode("GetChainMeta", [])[0]
+
+    def end_to_end_full_flow(index):
+        print("Testing flow: End-to-end commit")
+        print("  Running submit, finalize, and commit in sequence.")
+        return submit_partial_block(index) + finalize_full_block(index) + commit_full_block(index)
+
+    def end_to_end_reject_flow(index):
+        print("Testing flow: End-to-end reject")
+        print("  Running submit, finalize, and reject in sequence.")
+        return submit_partial_block(index) + finalize_full_block(index) + reject_full_block(index)
+
+    return {
+        "initialize_ledger": initialize_ledger,
+        "submit_partial_block": submit_partial_block,
+        "finalize_full_block": finalize_full_block,
+        "commit_full_block": commit_full_block,
+        "reject_full_block": reject_full_block,
+        "get_partial_block": get_partial_block,
+        "get_full_block": get_full_block,
+        "get_all_full_blocks": get_all_full_blocks,
+        "get_chain_metadata": get_chain_metadata,
+        "end_to_end_full_flow": end_to_end_full_flow,
+        "end_to_end_reject_flow": end_to_end_reject_flow,
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--iterations", type=int, default=20)
+    parser.add_argument("--csv-file", help="Optional CSV file with every individual iteration's latency")
+    parser.add_argument("--summary-csv-file", default="benchmark_summary.csv", help="CSV file with per-function latency summary statistics (written automatically)")
+    parser.add_argument(
+        "--functions",
+        nargs="+",
+        default=[
+            "initialize_ledger",
+            "submit_partial_block",
+            "finalize_full_block",
+            "commit_full_block",
+            "reject_full_block",
+            "get_partial_block",
+            "get_full_block",
+            "get_all_full_blocks",
+            "get_chain_metadata",
+            "end_to_end_full_flow",
+            "end_to_end_reject_flow",
+        ],
+    )
+    arguments = parser.parse_args()
+
+    test_functions = build_test_functions()
+    all_rows = []
+    summary_rows = []
+
+    for function_name in arguments.functions:
+        iteration_count = 1 if function_name in ("initialize_ledger", "get_all_full_blocks", "get_chain_metadata") else arguments.iterations
+        result = TestResult(function_name)
+        print(f"\n===== {function_name} =====")
+
+        for iteration_index in range(iteration_count):
+            print(f"\nIteration {iteration_index + 1} of {iteration_count}")
+            try:
+                latency = test_functions[function_name](iteration_index)
+                result.add(latency)
+                all_rows.append((function_name, iteration_index, latency))
+                print(f"  Result: succeeded in {latency:.2f} milliseconds")
+            except Exception as error:
+                result.failures += 1
+                all_rows.append((function_name, iteration_index, "ERROR"))
+                print(f"  Result: failed - {error}")
+
+        summary = result.summary()
+        if summary:
+            print(
+                f"\nSummary for {function_name}: "
+                f"mean={summary['mean']:.2f}ms, median={summary['median']:.2f}ms, "
+                f"percentile_95={summary['percentile_95']:.2f}ms, maximum={summary['maximum']:.2f}ms, "
+                f"standard_deviation={summary['standard_deviation']:.2f}ms, failures={result.failures}"
+            )
+            summary_rows.append([
+                function_name,
+                iteration_count,
+                result.failures,
+                f"{summary['minimum']:.2f}",
+                f"{summary['maximum']:.2f}",
+                f"{summary['mean']:.2f}",
+                f"{summary['median']:.2f}",
+                f"{summary['percentile_95']:.2f}",
+                f"{summary['percentile_99']:.2f}",
+                f"{summary['standard_deviation']:.2f}",
+            ])
+        else:
+            print(f"\nSummary for {function_name}: all {iteration_count} iterations failed")
+            summary_rows.append([
+                function_name, iteration_count, result.failures,
+                "", "", "", "", "", "", "",
+            ])
+
+    if arguments.csv_file:
+        with open(arguments.csv_file, "w", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["function_name", "iteration", "latency_milliseconds"])
+            writer.writerows(all_rows)
+        print(f"\nDetailed per-iteration results written to CSV file: {arguments.csv_file}")
+
+    with open(arguments.summary_csv_file, "w", newline="") as summary_csv_file:
+        writer = csv.writer(summary_csv_file)
+        writer.writerow([
+            "function_name",
+            "iterations_attempted",
+            "failures",
+            "minimum_ms",
+            "maximum_ms",
+            "mean_ms",
+            "median_ms",
+            "percentile_95_ms",
+            "percentile_99_ms",
+            "standard_deviation_ms",
+        ])
+        writer.writerows(summary_rows)
+    print(f"Per-function summary results written to CSV file: {arguments.summary_csv_file}")

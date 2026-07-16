@@ -3,6 +3,8 @@ import sys
 import json
 import time
 import secrets
+import threading
+import uuid
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..")
@@ -23,6 +25,26 @@ from shared.config import *
 # ===========================
 
 app = Flask(__name__)
+
+
+# ===========================
+# BATCH QUEUE
+# ===========================
+#
+# Instead of committing every finalized attack as its own FullBlock
+# (~2s/block observed earlier), pending, independently-verified partial
+# blocks are accumulated here and flushed together into ONE FullBlock via
+# FinalizeBatchFullBlock, amortizing the finalize+commit cost across many
+# attacks. A block is flushed when it hits BATCH_MAX_SIZE members or
+# BATCH_MAX_WAIT_SECONDS have elapsed since the oldest queued member,
+# whichever comes first -- so a lone attack during quiet periods still
+# gets committed promptly rather than waiting indefinitely for company.
+
+BATCH_MAX_SIZE = 10
+BATCH_MAX_WAIT_SECONDS = 15
+
+batch_lock = threading.Lock()
+batch_queue = []  # list of dicts: {partial_id, queued_at}
 
 
 # ===========================
@@ -212,6 +234,186 @@ def finalize_block():
         "performance_ms": performance,
         "total_ms": total_ms,
     })
+
+
+# ===========================
+# BATCH FINALIZE
+# ===========================
+
+@app.route("/finalize_block_batched", methods=["POST"])
+def finalize_block_batched():
+    """
+    Same independent re-verification as /finalize_block, but on success
+    the partial block is queued rather than immediately finalized+committed
+    individually. It will be folded into a Merkle-batch FullBlock the next
+    time the queue flushes (see flush_batch()). Returns immediately with
+    status "queued" -- the caller does not wait for the eventual on-chain
+    commit. Poll /batch_status or check /alerts / GetFullBlock later for
+    the resulting batch block_id.
+    """
+    data = request.json or {}
+
+    partial_id = data.get("partial_id")
+    evidence = data.get("evidence")
+    signature = data.get("signature")
+    public_key = data.get("public_key")
+    evidence_hash = data.get("evidence_hash")
+
+    missing = [
+        name for name, val in
+        [("partial_id", partial_id), ("evidence", evidence),
+         ("signature", signature), ("public_key", public_key),
+         ("evidence_hash", evidence_hash)]
+        if not val
+    ]
+    if missing:
+        return jsonify({
+            "status": "rejected",
+            "reason": f"missing required fields: {', '.join(missing)}"
+        }), 400
+
+    evidence_bytes = json.dumps(
+        evidence, sort_keys=True, separators=(",", ":"),
+    ).encode()
+
+    recomputed_hash = blockchain_client.compute_evidence_hash(evidence)
+    hash_matches = recomputed_hash == evidence_hash
+
+    try:
+        signature_valid = verify_packet(
+            evidence_bytes,
+            bytes.fromhex(signature),
+            bytes.fromhex(public_key),
+        )
+    except Exception as e:
+        signature_valid = False
+        print(f"Signature verification raised: {e}")
+
+    if not (hash_matches and signature_valid):
+        return jsonify({
+            "status": "rejected",
+            "partial_id": partial_id,
+            "hash_matches": hash_matches,
+            "signature_valid": signature_valid,
+            "reason": "hash commitment or signature verification failed; not queued",
+        }), 401
+
+    with batch_lock:
+        batch_queue.append({
+            "partial_id": partial_id,
+            "queued_at": time.time(),
+        })
+        queue_size = len(batch_queue)
+
+    print(f"\n[BATCH] Queued {partial_id} ({queue_size} pending)")
+
+    flushed_block_id = None
+    if queue_size >= BATCH_MAX_SIZE:
+        flushed_block_id = flush_batch()
+
+    return jsonify({
+        "status": "queued",
+        "partial_id": partial_id,
+        "queue_size": queue_size,
+        "flushed_block_id": flushed_block_id,
+    })
+
+
+def flush_batch():
+    """
+    Drains the current batch queue and commits everything in it as one
+    Merkle-batch FullBlock. Returns the new block_id, or None if the queue
+    was empty. Safe to call concurrently -- the queue swap happens under
+    batch_lock, so only one flush proceeds even if the size-trigger and
+    the timer-thread race.
+    """
+    with batch_lock:
+        if not batch_queue:
+            return None
+        members = batch_queue[:]
+        batch_queue.clear()
+
+    partial_ids = [m["partial_id"] for m in members]
+    block_id = "BATCH-" + uuid.uuid4().hex[:16]
+    nonce = secrets.token_hex(16)
+
+    print("\n==================================================")
+    print(f"CLOUD: FLUSHING BATCH ({len(partial_ids)} members)")
+    print("==================================================")
+    print(f"Batch Block ID : {block_id}")
+    for pid in partial_ids:
+        print(f"  - {pid}")
+
+    try:
+        finalize_ms = blockchain_client.finalize_batch_full_block(
+            block_id=block_id,
+            partial_ids=partial_ids,
+            nonce=nonce,
+            signatures_verified="true",
+        )
+        print(f"Batch Finalized : PROPOSED ({finalize_ms:.1f}ms)")
+    except Exception as e:
+        print(f"Batch Finalize FAILED: {e}")
+        # Members already passed independent verification when queued;
+        # put them back so they aren't silently dropped, and surface the
+        # failure for investigation rather than losing evidence.
+        with batch_lock:
+            batch_queue.extend(members)
+        return None
+
+    try:
+        commit_ms = blockchain_client.commit_full_block(block_id)
+        print(f"Batch Committed : COMMITTED ({commit_ms:.1f}ms)")
+    except Exception as e:
+        print(f"Batch Commit FAILED: {e}")
+        return block_id  # finalized but not committed; caller can inspect/retry commit
+
+    return block_id
+
+
+@app.route("/batch_status", methods=["GET"])
+def batch_status():
+    with batch_lock:
+        pending = [m["partial_id"] for m in batch_queue]
+        oldest_age = (
+            time.time() - min(m["queued_at"] for m in batch_queue)
+            if batch_queue else None
+        )
+    return jsonify({
+        "pending_count": len(pending),
+        "pending_partial_ids": pending,
+        "oldest_pending_age_seconds": oldest_age,
+        "batch_max_size": BATCH_MAX_SIZE,
+        "batch_max_wait_seconds": BATCH_MAX_WAIT_SECONDS,
+    })
+
+
+@app.route("/flush_batch_now", methods=["POST"])
+def flush_batch_now():
+    """Manual trigger, mainly for testing without waiting on the timer."""
+    block_id = flush_batch()
+    return jsonify({"flushed_block_id": block_id})
+
+
+def _batch_flush_timer():
+    """
+    Background thread: every second, checks whether the oldest queued
+    member has been waiting longer than BATCH_MAX_WAIT_SECONDS, and if so
+    flushes the whole queue -- ensuring attacks during quiet periods still
+    get committed promptly instead of waiting indefinitely for the queue
+    to fill up to BATCH_MAX_SIZE.
+    """
+    while True:
+        time.sleep(1)
+        with batch_lock:
+            if not batch_queue:
+                continue
+            oldest_age = time.time() - min(m["queued_at"] for m in batch_queue)
+        if oldest_age >= BATCH_MAX_WAIT_SECONDS:
+            flush_batch()
+
+
+threading.Thread(target=_batch_flush_timer, daemon=True).start()
 
 
 # ===========================

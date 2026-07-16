@@ -165,6 +165,27 @@ def finalize_full_block(
     )
 
 
+def finalize_batch_full_block(block_id, partial_ids, nonce, signatures_verified):
+    """
+    Folds multiple PENDING partial blocks (partial_ids: list[str]) into a
+    single FullBlock via a Merkle root over their commitments. Caller is
+    responsible for having independently verified every member's signature
+    before calling this with signatures_verified="true" -- the chaincode
+    does not re-verify signatures itself for batches, it only records the
+    caller's attestation (same trust model as the single-block flow's
+    signature_verified flag).
+    """
+    return _invoke(
+        "FinalizeBatchFullBlock",
+        [
+            block_id,
+            json.dumps(partial_ids),
+            nonce,
+            signatures_verified,
+        ],
+    )
+
+
 def commit_full_block(block_id):
     """
     Advances the chain tip: sets PreviousHash from ChainMeta, recomputes

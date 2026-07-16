@@ -112,14 +112,23 @@ if [ $? -eq 0 ]; then echo "✅ Committed successfully"; else echo "❌ Commit f
 
 echo ""
 echo "============================================"
-echo "  Verifying..."
+echo "  Verifying commit..."
 echo "============================================"
 peer lifecycle chaincode querycommitted --channelID mychannel --name iotcc
-
-sleep 3
-
+ 
 echo ""
-echo "Initializing ledger..."
+echo "  Waiting for chaincode container to come up..."
+sleep 8
+ 
+echo ""
+echo "  Checking chaincode container status (informational only)..."
+docker ps -a --filter "name=iotcc" --format "{{.ID}}  {{.Names}}  {{.Status}}" 2>/dev/null || \
+    echo "  (docker CLI not available in this shell / different host from peers -- skip)"
+ 
+echo ""
+echo "============================================"
+echo "  InitLedger"
+echo "============================================"
 peer chaincode invoke \
     -o localhost:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
@@ -130,14 +139,29 @@ peer chaincode invoke \
     --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
     --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
     -c '{"function":"InitLedger","Args":[]}'
-
+INIT_STATUS=$?
+if [ $INIT_STATUS -ne 0 ]; then
+    echo ""
+    echo "❌ InitLedger failed. This usually means the chaincode container failed to start."
+    echo "   Run: docker ps -a --filter \"name=iotcc\""
+    echo "   Then: docker logs <container_id>"
+    echo "   Aborting rest of smoke test."
+    exit 1
+fi
+ 
+sleep 3
+ 
+echo ""
+echo "Querying chain meta (expect height 0, tip GENESIS)..."
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetChainMeta","Args":[]}'
+ 
+echo ""
 echo "============================================"
 echo "  Partial block -> Full block smoke test"
 echo "============================================"
-
-sleep 3
-
-echo "Submitting partial block..."
+ 
+echo ""
+echo "Submitting partial block PB001..."
 peer chaincode invoke \
     -o localhost:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
@@ -147,12 +171,32 @@ peer chaincode invoke \
     --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
     --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
     --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
-    -c '{"function":"SubmitPartialBlock","Args":["PB001","edge-cluster-1","deadbeef","cafebabe","feedface","edge-cluster-1","device-001"]}'
-
+    -c '{"function":"SubmitPartialBlock","Args":["PB001","owner-001","deadbeef","cafebabe","feedface","edge-cluster-1","device-001"]}'
+ 
 sleep 3
-
+ 
 echo ""
-echo "Finalizing full block from partial block..."
+echo "Querying PB001 (expect status PENDING)..."
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetPartialBlock","Args":["PB001"]}'
+ 
+echo ""
+echo "Attempting duplicate SubmitPartialBlock for PB001 (should FAIL)..."
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls \
+    --cafile $ORDERER_CA \
+    -C mychannel -n iotcc \
+    --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
+    --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
+    --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
+    -c '{"function":"SubmitPartialBlock","Args":["PB001","owner-001","deadbeef","cafebabe","feedface","edge-cluster-1","device-001"]}' \
+    || echo "(expected failure above - PB001 already exists)"
+ 
+sleep 3
+ 
+echo ""
+echo "Finalizing full block FB001 from PB001 (signatureVerified=true)..."
 peer chaincode invoke \
     -o localhost:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
@@ -163,15 +207,40 @@ peer chaincode invoke \
     --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
     --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
     -c '{"function":"FinalizeFullBlock","Args":["FB001","PB001","123456","true"]}'
-
+ 
 sleep 3
-
+ 
 echo ""
-echo "Querying full block..."
+echo "Querying full block FB001 (expect ConsensusStatus=PROPOSED, Hash empty)..."
 peer chaincode query -C mychannel -n iotcc -c '{"function":"GetFullBlock","Args":["FB001"]}'
-
+ 
 echo ""
-echo "Committing full block..."
+echo "Querying PB001 again (expect status SEALED, fullBlockId=FB001)..."
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetPartialBlock","Args":["PB001"]}'
+ 
+echo ""
+echo "Attempting to finalize PB001 again into FB999 (should FAIL - already sealed)..."
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls \
+    --cafile $ORDERER_CA \
+    -C mychannel -n iotcc \
+    --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
+    --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
+    --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
+    -c '{"function":"FinalizeFullBlock","Args":["FB999","PB001","111111","true"]}' \
+    || echo "(expected failure above - PB001 already sealed)"
+ 
+sleep 3
+ 
+echo ""
+echo "============================================"
+echo "  Consensus / commit"
+echo "============================================"
+ 
+echo ""
+echo "Committing full block FB001..."
 peer chaincode invoke \
     -o localhost:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
@@ -182,14 +251,99 @@ peer chaincode invoke \
     --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
     --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
     -c '{"function":"CommitFullBlock","Args":["FB001"]}'
-
+ 
 sleep 3
-
+ 
 echo ""
-echo "Querying chain meta (should show updated tip + height)..."
+echo "Querying full block FB001 (expect ConsensusStatus=COMMITTED, Hash set, PreviousHash=genesis)..."
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetFullBlock","Args":["FB001"]}'
+ 
+echo ""
+echo "Querying chain meta (expect height 1, tip FB001)..."
 peer chaincode query -C mychannel -n iotcc -c '{"function":"GetChainMeta","Args":[]}'
-
+ 
+echo ""
+echo "Attempting to commit FB001 again (should FAIL - already committed)..."
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls \
+    --cafile $ORDERER_CA \
+    -C mychannel -n iotcc \
+    --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
+    --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
+    --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
+    -c '{"function":"CommitFullBlock","Args":["FB001"]}' \
+    || echo "(expected failure above - FB001 already committed)"
+ 
+sleep 3
+ 
+echo ""
+echo "============================================"
+echo "  Reject-path smoke test (separate block)"
+echo "============================================"
+ 
+echo ""
+echo "Submitting partial block PB002..."
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls \
+    --cafile $ORDERER_CA \
+    -C mychannel -n iotcc \
+    --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
+    --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
+    --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
+    -c '{"function":"SubmitPartialBlock","Args":["PB002","owner-002","deadbeef02","cafebabe02","feedface02","edge-cluster-2","device-002"]}'
+ 
+sleep 3
+ 
+echo ""
+echo "Finalizing full block FB002 from PB002..."
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls \
+    --cafile $ORDERER_CA \
+    -C mychannel -n iotcc \
+    --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
+    --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
+    --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
+    -c '{"function":"FinalizeFullBlock","Args":["FB002","PB002","222222","true"]}'
+ 
+sleep 3
+ 
+echo ""
+echo "Rejecting FB002..."
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls \
+    --cafile $ORDERER_CA \
+    -C mychannel -n iotcc \
+    --peerAddresses localhost:7051 --tlsRootCertFiles $ORG1_TLS \
+    --peerAddresses localhost:9051 --tlsRootCertFiles $ORG2_TLS \
+    --peerAddresses localhost:11051 --tlsRootCertFiles $ORG3_TLS \
+    -c '{"function":"RejectFullBlock","Args":["FB002"]}'
+ 
+sleep 3
+ 
+echo ""
+echo "Querying FB002 (expect ConsensusStatus=REJECTED)..."
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetFullBlock","Args":["FB002"]}'
+ 
+echo ""
+echo "Chain meta should be unaffected by rejection (still height 1, tip FB001)..."
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetChainMeta","Args":[]}'
+ 
+echo ""
+echo "============================================"
+echo "  Final: list all full blocks"
+echo "============================================"
+peer chaincode query -C mychannel -n iotcc -c '{"function":"GetAllFullBlocks","Args":[]}'
+ 
 echo ""
 echo "============================================"
 echo "  Done!"
 echo "============================================"
+ 

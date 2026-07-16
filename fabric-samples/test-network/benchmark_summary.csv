@@ -1,0 +1,12 @@
+function_name,iterations_attempted,failures,minimum_ms,maximum_ms,mean_ms,median_ms,percentile_95_ms,percentile_99_ms,standard_deviation_ms
+initialize_ledger,1,0,2144.54,2144.54,2144.54,2144.54,2144.54,2144.54,0.00
+submit_partial_block,20,0,2072.92,2139.26,2081.31,2076.19,2117.67,2117.67,16.16
+finalize_full_block,20,0,2072.00,2093.09,2077.21,2075.35,2088.72,2088.72,5.05
+commit_full_block,20,0,2071.46,2095.78,2077.60,2077.46,2082.11,2082.11,5.11
+reject_full_block,20,0,2069.27,2094.32,2074.22,2072.37,2083.10,2083.10,5.60
+get_partial_block,20,0,40.23,44.46,42.12,42.20,44.17,44.17,1.26
+get_full_block,20,0,40.65,46.32,43.13,43.07,45.65,45.65,1.47
+get_all_full_blocks,1,0,63.32,63.32,63.32,63.32,63.32,63.32,0.00
+get_chain_metadata,1,0,41.46,41.46,41.46,41.46,41.46,41.46,0.00
+end_to_end_full_flow,20,0,6216.44,6308.71,6229.82,6223.14,6247.09,6247.09,19.82
+end_to_end_reject_flow,20,0,6217.20,6280.59,6238.36,6237.29,6253.12,6253.12,14.28

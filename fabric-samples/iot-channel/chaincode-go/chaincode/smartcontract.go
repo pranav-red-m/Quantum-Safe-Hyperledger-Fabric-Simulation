@@ -12,34 +12,44 @@ import (
 type SmartContract struct {
 	contractapi.Contract
 }
+
 // PartialBlock = ParBESRi = [OWESRi, PUESRi, ENC_PUESRi(TRASESRi)]
+//
+// FullBlockID is *string, not string. contractapi's schema reflector marks
+// plain string fields as "required" in the generated response schema
+// regardless of the omitempty JSON tag -- omitempty only changes
+// marshaling, not the schema. Since FullBlockID is genuinely absent (empty)
+// until the partial block is sealed, a plain string field causes
+// GetPartialBlock to fail response validation with "fullBlockId is
+// required" for any PENDING block. Using *string makes the schema
+// generator emit the field as optional/nullable, so nil passes validation.
 type PartialBlock struct {
-	PartialBlockID string `json:"partialBlockId"`
-	OwnerID        string `json:"ownerId"`        // OWESRi
-	OwnerPubKey    string `json:"ownerPubKey"`     // PUESRi
-	EncryptedTx    string `json:"encryptedTx"`     // ENC_PUESRi(TRASESRi)
-	Signature      string `json:"signature"`       // sgESRi, produced at the edge, carried through
-	EdgeCluster    string `json:"edgeCluster"`
-	DeviceID       string `json:"deviceId"`
-	Status         string `json:"status"` // PENDING | SEALED
-	FullBlockID    string `json:"fullBlockId,omitempty"`
+	PartialBlockID string  `json:"partialBlockId"`
+	OwnerID        string  `json:"ownerId"`        // OWESRi
+	OwnerPubKey    string  `json:"ownerPubKey"`    // PUESRi
+	EncryptedTx    string  `json:"encryptedTx"`    // ENC_PUESRi(TRASESRi)
+	Signature      string  `json:"signature"`      // sgESRi, produced at the edge, carried through
+	EdgeCluster    string  `json:"edgeCluster"`
+	DeviceID       string  `json:"deviceId"`
+	Status         string  `json:"status"`                  // PENDING | SEALED
+	FullBlockID string `json:"fullBlockId"`
 }
 
 // FullBlock = FulBESRi = [BIDESRi, TSi, RNi, hashESRi, hashESRi-1, OWESRi, PUESRi, ENC_PUESRi(TRASESRi), sgESRi]
 type FullBlock struct {
-	BlockID         string `json:"blockId"`      // BIDESRi
-	Timestamp       string `json:"timestamp"`    // TSi - set by chaincode via ctx.GetStub().GetTxTimestamp(), not client-supplied
-	Nonce           string `json:"nonce"`        // RNi
-	Hash            string `json:"hash"`         // hashESRi
-	PreviousHash    string `json:"previousHash"` // hashESRi-1
-	OwnerID         string `json:"ownerId"`
-	OwnerPubKey     string `json:"ownerPubKey"`
-	EncryptedTx     string `json:"encryptedTx"`
-	Signature       string `json:"signature"`         // sgESRi, carried from PartialBlock
-	SignatureVerified bool `json:"signatureVerified"` // asserted by caller at FinalizeFullBlock time
-	PartialBlockID  string `json:"partialBlockId"`
-	DeviceID        string `json:"deviceId"`
-	ConsensusStatus string `json:"consensusStatus"` // PROPOSED | COMMITTED | REJECTED
+	BlockID          string `json:"blockId"`          // BIDESRi
+	Timestamp        string `json:"timestamp"`        // TSi - set by chaincode via ctx.GetStub().GetTxTimestamp(), not client-supplied
+	Nonce            string `json:"nonce"`            // RNi
+	Hash             string `json:"hash"`             // hashESRi
+	PreviousHash     string `json:"previousHash"`     // hashESRi-1
+	OwnerID          string `json:"ownerId"`
+	OwnerPubKey      string `json:"ownerPubKey"`
+	EncryptedTx      string `json:"encryptedTx"`
+	Signature        string `json:"signature"`              // sgESRi, carried from PartialBlock
+	SignatureVerified bool   `json:"signatureVerified"`     // asserted by caller at FinalizeFullBlock time
+	PartialBlockID   string `json:"partialBlockId"`
+	DeviceID         string `json:"deviceId"`
+	ConsensusStatus  string `json:"consensusStatus"`        // PROPOSED | COMMITTED | REJECTED
 }
 
 type ChainMeta struct {
@@ -53,24 +63,25 @@ const (
 	genesisHash  = "0000000000000000000000000000000000000000000000000000000000000"
 )
 
-// ---------- Init ----------
 
+// ---------- Init ----------
 func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface) error {
 	meta := ChainMeta{
 		LatestHash:    genesisHash,
 		LatestBlockID: "GENESIS",
 		Height:        0,
 	}
+
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("failed to marshal chain meta: %v", err)
 	}
+
 	return ctx.GetStub().PutState(chainMetaKey, metaJSON)
 }
 
 // ---------- Edge Server: create partial block ----------
-
-// CreatePartialBlock is invoked by an edge server (ESRi) after it has
+// SubmitPartialBlock is invoked by an edge server (ESRi) after it has
 // authenticated the IoT device and processed its data into a transaction.
 // It stores ParBESRi = [OWESRi, PUESRi, ENC_PUESRi(TRASESRi)].
 func (s *SmartContract) SubmitPartialBlock(
@@ -90,6 +101,7 @@ func (s *SmartContract) SubmitPartialBlock(
 	if exists {
 		return fmt.Errorf("partial block %s already exists", partialBlockID)
 	}
+
 	if ownerID == "" || ownerPubKey == "" || encryptedTx == "" || signature == "" || deviceID == "" {
 		return fmt.Errorf("ownerID, ownerPubKey, encryptedTx, signature and deviceID are required")
 	}
@@ -103,11 +115,14 @@ func (s *SmartContract) SubmitPartialBlock(
 		EdgeCluster:    edgeCluster,
 		DeviceID:       deviceID,
 		Status:         "PENDING",
+		FullBlockID:    "",
 	}
+
 	partialJSON, err := json.Marshal(partial)
 	if err != nil {
 		return fmt.Errorf("failed to marshal partial block: %v", err)
 	}
+
 	return ctx.GetStub().PutState(partialBlockID, partialJSON)
 }
 
@@ -119,16 +134,17 @@ func (s *SmartContract) GetPartialBlock(ctx contractapi.TransactionContextInterf
 	if partialJSON == nil {
 		return nil, fmt.Errorf("partial block %s does not exist", partialBlockID)
 	}
+
 	var partial PartialBlock
 	if err := json.Unmarshal(partialJSON, &partial); err != nil {
 		return nil, err
 	}
+
 	return &partial, nil
 }
 
 // ---------- Cloud Server: assemble full block from partial block ----------
-
-// CreateFullBlock is invoked by a cloud server (CSk) after receiving ParBESRi.
+// FinalizeFullBlock is invoked by a cloud server (CSk) after receiving ParBESRi.
 // It links to the current chain tip for hashESRi-1, computes hashESRi over the
 // block contents, and stores FulBESRi as PROPOSED pending consensus.
 func (s *SmartContract) FinalizeFullBlock(
@@ -150,8 +166,10 @@ func (s *SmartContract) FinalizeFullBlock(
 	if err != nil {
 		return err
 	}
+
 	if partial.Status == "SEALED" {
-		return fmt.Errorf("partial block %s already sealed into %s", partialBlockID, partial.FullBlockID)
+		sealedInto := partial.FullBlockID
+		return fmt.Errorf("partial block %s already sealed into %s", partialBlockID, sealedInto)
 	}
 
 	verified := signatureVerified == "true"
@@ -165,35 +183,38 @@ func (s *SmartContract) FinalizeFullBlock(
 	}
 
 	full := FullBlock{
-		BlockID:           blockID,
-		Timestamp:         txTimestamp.AsTime().UTC().Format("2006-01-02T15:04:05Z"),
-		Nonce:             nonce,
-		PreviousHash:      "",
-		OwnerID:           partial.OwnerID,
-		OwnerPubKey:       partial.OwnerPubKey,
-		EncryptedTx:       partial.EncryptedTx,
-		Signature:         partial.Signature,
+		BlockID:          blockID,
+		Timestamp:        txTimestamp.AsTime().UTC().Format("2006-01-02T15:04:05Z"),
+		Nonce:            nonce,
+		PreviousHash:     "",
+		OwnerID:          partial.OwnerID,
+		OwnerPubKey:      partial.OwnerPubKey,
+		EncryptedTx:      partial.EncryptedTx,
+		Signature:        partial.Signature,
 		SignatureVerified: verified,
-		PartialBlockID:    partialBlockID,
-		DeviceID:          partial.DeviceID,
-		ConsensusStatus:   "PROPOSED",
-		Hash		   :   "",
+		PartialBlockID:   partialBlockID,
+		DeviceID:         partial.DeviceID,
+		ConsensusStatus:  "PROPOSED",
+		Hash:             "",
 	}
 
 	fullJSON, err := json.Marshal(full)
 	if err != nil {
 		return fmt.Errorf("failed to marshal full block: %v", err)
 	}
+
 	if err := ctx.GetStub().PutState(blockID, fullJSON); err != nil {
 		return err
 	}
 
 	partial.Status = "SEALED"
 	partial.FullBlockID = blockID
+
 	partialJSON, err := json.Marshal(partial)
 	if err != nil {
 		return err
 	}
+
 	return ctx.GetStub().PutState(partialBlockID, partialJSON)
 }
 
@@ -205,15 +226,16 @@ func (s *SmartContract) GetFullBlock(ctx contractapi.TransactionContextInterface
 	if blockJSON == nil {
 		return nil, fmt.Errorf("full block %s does not exist", blockID)
 	}
+
 	var full FullBlock
 	if err := json.Unmarshal(blockJSON, &full); err != nil {
 		return nil, err
 	}
+
 	return &full, nil
 }
 
 // ---------- Consensus / commit ----------
-
 // CommitFullBlock is invoked by the P2PCS network leader once the standard
 // consensus procedure (proposal, voting/endorsement, ordering) has approved
 // FulBESRi. It verifies hash linkage and integrity, then advances the chain tip.
@@ -222,6 +244,7 @@ func (s *SmartContract) CommitFullBlock(ctx contractapi.TransactionContextInterf
 	if err != nil {
 		return err
 	}
+
 	if full.ConsensusStatus == "COMMITTED" {
 		return fmt.Errorf("full block %s is already committed", blockID)
 	}
@@ -236,25 +259,27 @@ func (s *SmartContract) CommitFullBlock(ctx contractapi.TransactionContextInterf
 
 	// verify block integrity (recompute hash, ignoring the stored hash+status fields)
 	recomputed := computeBlockHash(FullBlock{
-		BlockID:           full.BlockID,
-		Timestamp:         full.Timestamp,
-		Nonce:             full.Nonce,
-		PreviousHash:      full.PreviousHash,
-		OwnerID:           full.OwnerID,
-		OwnerPubKey:       full.OwnerPubKey,
-		EncryptedTx:       full.EncryptedTx,
-		Signature:         full.Signature,
+		BlockID:          full.BlockID,
+		Timestamp:        full.Timestamp,
+		Nonce:            full.Nonce,
+		PreviousHash:     full.PreviousHash,
+		OwnerID:          full.OwnerID,
+		OwnerPubKey:      full.OwnerPubKey,
+		EncryptedTx:      full.EncryptedTx,
+		Signature:        full.Signature,
 		SignatureVerified: full.SignatureVerified,
-		PartialBlockID:    full.PartialBlockID,
-		DeviceID:          full.DeviceID,
+		PartialBlockID:   full.PartialBlockID,
+		DeviceID:         full.DeviceID,
 	})
-	full.Hash = recomputed
 
+	full.Hash = recomputed
 	full.ConsensusStatus = "COMMITTED"
+
 	fullJSON, err := json.Marshal(full)
 	if err != nil {
 		return err
 	}
+
 	if err := ctx.GetStub().PutState(blockID, fullJSON); err != nil {
 		return err
 	}
@@ -262,10 +287,12 @@ func (s *SmartContract) CommitFullBlock(ctx contractapi.TransactionContextInterf
 	meta.LatestHash = full.Hash
 	meta.LatestBlockID = full.BlockID
 	meta.Height++
+
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
 		return err
 	}
+
 	return ctx.GetStub().PutState(chainMetaKey, metaJSON)
 }
 
@@ -276,19 +303,22 @@ func (s *SmartContract) RejectFullBlock(ctx contractapi.TransactionContextInterf
 	if err != nil {
 		return err
 	}
+
 	if full.ConsensusStatus == "COMMITTED" {
 		return fmt.Errorf("cannot reject block %s: already committed", blockID)
 	}
+
 	full.ConsensusStatus = "REJECTED"
+
 	fullJSON, err := json.Marshal(full)
 	if err != nil {
 		return err
 	}
+
 	return ctx.GetStub().PutState(blockID, fullJSON)
 }
 
 // ---------- Queries ----------
-
 func (s *SmartContract) GetChainMeta(ctx contractapi.TransactionContextInterface) (*ChainMeta, error) {
 	return s.getChainMeta(ctx)
 }
@@ -302,24 +332,27 @@ func (s *SmartContract) GetAllFullBlocks(ctx contractapi.TransactionContextInter
 	defer iterator.Close()
 
 	var blocks []*FullBlock
+
 	for iterator.HasNext() {
 		item, err := iterator.Next()
 		if err != nil {
 			return nil, err
 		}
+
 		var full FullBlock
 		if err := json.Unmarshal(item.Value, &full); err != nil {
 			continue // skip non-FullBlock records (partial blocks, chain meta)
 		}
+
 		if full.BlockID != "" {
 			blocks = append(blocks, &full)
 		}
 	}
+
 	return blocks, nil
 }
 
 // ---------- Helpers ----------
-
 func (s *SmartContract) assetExists(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
 	assetJSON, err := ctx.GetStub().GetState(id)
 	if err != nil {
@@ -336,10 +369,12 @@ func (s *SmartContract) getChainMeta(ctx contractapi.TransactionContextInterface
 	if metaJSON == nil {
 		return nil, fmt.Errorf("ledger not initialized: call InitLedger first")
 	}
+
 	var meta ChainMeta
 	if err := json.Unmarshal(metaJSON, &meta); err != nil {
 		return nil, err
 	}
+
 	return &meta, nil
 }
 
@@ -349,6 +384,7 @@ func computeBlockHash(f FullBlock) string {
 	payload := f.BlockID + f.Timestamp + f.Nonce + f.PreviousHash +
 		f.OwnerID + f.OwnerPubKey + f.EncryptedTx + f.Signature +
 		f.PartialBlockID + f.DeviceID
+
 	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:])
 }

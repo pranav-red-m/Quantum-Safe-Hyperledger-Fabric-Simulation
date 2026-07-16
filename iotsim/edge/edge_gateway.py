@@ -142,6 +142,8 @@ retry_queue = []
 # ===========================
 
 last_summary_time = time.time()
+MAX_ALERTS = 200
+attack_alerts = []
 
 # ===========================
 # UPDATE STREAMING STATS
@@ -351,6 +353,79 @@ threading.Thread(
     daemon=True
 
 ).start()
+def record_alert(device_id, decision, threat_score, blockchain_status,
+                  blockchain_tx_id, blockchain_block_id):
+    global attack_alerts
+    attack_alerts.insert(0, {
+        "timestamp": time.time(),
+        "device_id": device_id,
+        "decision": decision,
+        "threat_score": threat_score,
+        "blockchain_status": blockchain_status,
+        "blockchain_tx_id": blockchain_tx_id,
+        "blockchain_block_id": blockchain_block_id,
+    })
+    if len(attack_alerts) > MAX_ALERTS:
+        attack_alerts.pop()
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>IDS Attack Dashboard</title>
+<style>
+  body { font-family: monospace; background: #111; color: #eee; padding: 20px; }
+  h1 { font-size: 18px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+  th, td { border: 1px solid #444; padding: 6px 10px; text-align: left; font-size: 13px; }
+  th { background: #222; }
+  tr:nth-child(even) { background: #1a1a1a; }
+  .committed { color: #4caf50; }
+  .pending { color: #ffb300; }
+  .failed, .finalize_failed, .commit_failed, .finalize_unreachable { color: #f44336; }
+  #count { font-size: 14px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<h1>IDS Attack Dashboard</h1>
+<div id="count">Loading...</div>
+<table id="tbl">
+  <thead>
+    <tr>
+      <th>Time</th><th>Device</th><th>Decision</th><th>Score</th>
+      <th>Chain Status</th><th>Partial ID</th><th>Block ID</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+ 
+<script>
+async function refresh() {
+  const res = await fetch('/alerts');
+  const data = await res.json();
+  document.getElementById('count').innerText = data.length + ' attacks flagged';
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  for (const a of data) {
+    const tr = document.createElement('tr');
+    const time = new Date(a.timestamp * 1000).toLocaleTimeString();
+    tr.innerHTML = `
+      <td>${time}</td>
+      <td>${a.device_id}</td>
+      <td>${a.decision}</td>
+      <td>${a.threat_score.toFixed(4)}</td>
+      <td class="${a.blockchain_status}">${a.blockchain_status}</td>
+      <td>${a.blockchain_tx_id || ''}</td>
+      <td>${a.blockchain_block_id || ''}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
+"""
 
 # ===========================
 # SCAN API
@@ -628,7 +703,6 @@ def scan():
 
         print("-----------------------------------------------")
         print(f"{'Measured Total':<30}: {total_latency:.3f} ms")
-
         return jsonify({
 
                 "status":"benign",
@@ -964,7 +1038,14 @@ def scan():
 
     print("-----------------------------------------------")
     print(f"{'Measured Total':<30}: {total_latency:.3f} ms")
-
+    record_alert(
+        device_id=device_id,
+        decision=status,
+        threat_score=threat_score,
+        blockchain_status=blockchain_status,
+        blockchain_tx_id=blockchain_tx_id,
+        blockchain_block_id=blockchain_block_id,
+    )
     return jsonify({
         "status": status,
         "device": device_id,
@@ -994,6 +1075,16 @@ def reset_device():
     device = data["device_id"]
     registry.reset_device(device)
     return jsonify({"status": "success", "device": device})
+
+@app.route("/alerts", methods=["GET"])
+def alerts():
+    return jsonify(attack_alerts)
+ 
+ 
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    return DASHBOARD_HTML
+
 
 # ===========================
 # START SERVER
