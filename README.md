@@ -30,46 +30,42 @@ export FABRIC_CFG_PATH=/workspaces/Quantum-Safe-Hyperledger-Fabric-Simulation/fa
 source ./scripts/envVar.sh
 ```
 
-Initialize the peer environment:
+Add peer1.org1 and peer1.org2 to the channel
 
 ```bash
-setGlobals 1
+./setup.sh
+```
+
+Add peer0.org1 to the channel
+
+```bash
+cd addOrg3
+./addOrg3.sh up
+```
+
+Go back to fabric-samples/test-network
+
+```bash
+cd ..
 ```
 
 ---
 
-## 3️⃣ Fetch the Channel Genesis Block
+## 3️⃣ Install IoT Chaincode
 
 ```bash
-peer channel fetch 0 mychannel.block \
--o localhost:7050 \
---ordererTLSHostnameOverride orderer.example.com \
--c mychannel \
---tls \
---cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
+./install-iotcc.sh
 ```
 
 ---
 
-## 4️⃣ Join the Peers to the Channel
-
-Join Peer 1:
-
-```bash
-setGlobals 1
-export CORE_PEER_ADDRESS=localhost:8051
-peer channel join -b mychannel.block
-```
-
-Join Peer 2:
+## 4️⃣ Deploy the IoT Chaincode with 2/3 approval
+Note: Use the package ID provided after running ./install-iotcc.sh
 
 ```bash
-setGlobals 2
-export CORE_PEER_ADDRESS=localhost:10051
-peer channel join -b mychannel.block
+./deploy-iotcc.sh [PKG_ID]
 ```
 
----
 
 ## 5️⃣ Add Organization 3
 
@@ -116,25 +112,6 @@ Deploy using the package ID produced by the installation script:
 This deploys the chaincode with a **2/3 organization consensus policy**.
 
 The blockchain prototype is now fully deployed.
-
----
-
-# 📊 Query the Blockchain
-
-To retrieve every record stored on the blockchain:
-
-```bash
-peer chaincode query \
--C mychannel \
--n iotcc \
--c '{"function":"GetAllRecords","Args":[]}'
-```
-
-To invoke any other chaincode function, simply replace `GetAllRecords` with the desired function defined in:
-
-```text
-fabric-samples/iot-channel/chaincode-go/chaincode/smartcontract.go
-```
 
 ---
 
