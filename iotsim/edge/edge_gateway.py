@@ -32,7 +32,8 @@ import warnings
 from security.kem_server import KEMServer
 from security.aes_session import (
     derive_session_key,
-    decrypt_packet
+    decrypt_packet,
+    verify_hmac
 )
 from security.evidence_security import EvidenceSecurity
 from security import blockchain_client
@@ -142,8 +143,6 @@ retry_queue = []
 # ===========================
 
 last_summary_time = time.time()
-MAX_ALERTS = 200
-attack_alerts = []
 
 # ===========================
 # UPDATE STREAMING STATS
@@ -353,6 +352,15 @@ threading.Thread(
     daemon=True
 
 ).start()
+
+# ===========================
+# ATTACK ALERT LOG (for dashboard)
+# ===========================
+
+MAX_ALERTS = 200
+attack_alerts = []
+
+
 def record_alert(device_id, decision, threat_score, blockchain_status,
                   blockchain_tx_id, blockchain_block_id):
     global attack_alerts
@@ -367,6 +375,8 @@ def record_alert(device_id, decision, threat_score, blockchain_status,
     })
     if len(attack_alerts) > MAX_ALERTS:
         attack_alerts.pop()
+
+
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html>
@@ -397,7 +407,7 @@ DASHBOARD_HTML = """
   </thead>
   <tbody id="tbody"></tbody>
 </table>
- 
+
 <script>
 async function refresh() {
   const res = await fetch('/alerts');
@@ -519,6 +529,12 @@ def scan():
        data["nonce"]
     )
 
+    auth_tag = bytes.fromhex(
+    data["auth_tag"]
+    )
+
+    session_id = data["session_id"]
+
     shared_secret, kem_decap_time = kem_server.decapsulate(
     kem_ciphertext
     )
@@ -539,15 +555,55 @@ def scan():
 
     performance["ML-KEM Decapsulation"] = kem_decap_time
 
-    session_key = derive_session_key(shared_secret)
+    session_key = derive_session_key(
+        shared_secret,
+        session_id.encode()
+    )
 
-    fingerprint = hashlib.sha256(session_key).hexdigest()[:16].upper()
+    fingerprint = hashlib.sha256(
+        session_key
+    ).hexdigest()[:16].upper()
 
     print()
 
     print("Session Key Fingerprint")
 
     print(fingerprint + "...")
+    # ==========================
+    # HMAC VERIFICATION
+    # ==========================
+
+    print("\n==================================================")
+    print("MESSAGE AUTHENTICATION")
+    print("==================================================")
+
+    hmac_start = time.perf_counter()
+    if not verify_hmac(
+        session_key=session_key,
+        session_id=session_id,
+        ciphertext=ciphertext,
+        received_tag=auth_tag
+    ):
+
+        print("Authentication : FAILED")
+        print("Decision       : PACKET DROPPED")
+
+        return jsonify({
+
+            "status": "authentication_failed"
+
+        }), 401
+    performance["HMAC Verification"] = (
+        time.perf_counter() - hmac_start
+    ) * 1000
+
+    print("Authentication : VERIFIED")
+    print("Integrity      : VERIFIED")
+    print("Authenticity   : VERIFIED")
+
+    # ==========================
+    # AES DECRYPTION
+    # ==========================
     aes_start = time.perf_counter()
 
     packet = decrypt_packet(
@@ -606,7 +662,6 @@ def scan():
 
     )
 
-    cnn_start = time.perf_counter()
 
     cnn_start = time.perf_counter()
 
@@ -614,9 +669,7 @@ def scan():
          logits = edge_model(x)
          threat_score = torch.sigmoid(logits).item()
 
-    performance["CNN-LSTM Inference"] = (
-         time.perf_counter() - cnn_start
-        ) * 1000
+
 
     print("\n========== MODEL OUTPUT ==========")
     print(f"Threat Score         : {threat_score:.6f}")
@@ -624,9 +677,7 @@ def scan():
     print(f"Ground Truth         : {data.get('actual_label')}")
     print("==================================\n")
 
-    performance["CNN-LSTM Inference"] = (
-        time.perf_counter() - cnn_start
-    ) * 1000
+   
 
     performance["CNN-LSTM Inference"] = (
     time.perf_counter() - cnn_start
@@ -703,6 +754,7 @@ def scan():
 
         print("-----------------------------------------------")
         print(f"{'Measured Total':<30}: {total_latency:.3f} ms")
+
         return jsonify({
 
                 "status":"benign",
@@ -807,7 +859,10 @@ def scan():
 
     "attack_count": registry.get_device(device_id)["attack_count"],
 
-    "model_version": CURRENT_VERSION
+    "model_version": CURRENT_VERSION,
+    "session_id": session_id,
+
+    "cipher_hash": hashlib.sha256(ciphertext).hexdigest()
     }
     
     sign_start = time.perf_counter()

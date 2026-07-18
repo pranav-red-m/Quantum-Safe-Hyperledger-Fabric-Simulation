@@ -26,6 +26,43 @@ from shared.config import *
 
 app = Flask(__name__)
 
+# ==============================================================
+# VISUAL HELPERS
+# ==============================================================
+
+BANNER_WIDTH = 60
+SECTION_CHAR = "="
+SUBSECTION_CHAR = "-"
+def print_banner(title: str):
+    """Top-level section banner, e.g. 'CLOUD: FINALIZE FULL BLOCK'."""
+    print()
+    print(SECTION_CHAR * BANNER_WIDTH)
+    print(f" {title}")
+    print(SECTION_CHAR * BANNER_WIDTH)
+ 
+ 
+def print_subbanner(title: str):
+    """Lighter-weight banner for sub-steps within a section."""
+    print(f"\n[{title}]")
+    print(SUBSECTION_CHAR * BANNER_WIDTH)
+ 
+ 
+def print_kv(label: str, value, width: int = 24):
+    """Aligned 'label : value' line."""
+    print(f"{label:<{width}}: {value}")
+ 
+ 
+def print_status_line(label: str, ok: bool, width: int = 24):
+    """Aligned 'label : YES/NO' line."""
+    print_kv(label, "YES" if ok else "NO", width=width)
+ 
+ 
+def print_perf_table(performance: dict, total_ms: float):
+    print_banner("CLOUD: BLOCKCHAIN PERFORMANCE")
+    for name, value in performance.items():
+        print(f"  {name:<30}: {value:>10.3f} ms")
+    print("  " + SUBSECTION_CHAR * (BANNER_WIDTH - 2))
+    print(f"  {'Total':<30}: {total_ms:>10.3f} ms")
 
 # ===========================
 # BATCH QUEUE

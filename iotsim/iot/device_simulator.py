@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+import uuid
 
 import pandas as pd
 import requests
@@ -11,7 +12,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from security.kem_client import KEMClient
-from security.aes_session import derive_session_key, encrypt_packet
+from security.aes_session import derive_session_key, encrypt_packet, generate_hmac
 from shared.config import EDGE_PORT
 
 EDGE_URL = f"http://localhost:{EDGE_PORT}/scan"
@@ -99,17 +100,23 @@ def main():
         try:
             kem_ciphertext, shared_secret, _ = kem_client.encapsulate()
 
-            session_key = derive_session_key(shared_secret)
+            # Per-session id binds the derived key + HMAC to this exchange
+            session_id = uuid.uuid4().hex
+            session_key = derive_session_key(shared_secret, session_id.encode())
 
             nonce, ciphertext = encrypt_packet(packet, session_key)
 
+            authentication_tag = generate_hmac(session_key, session_id, ciphertext)
+
             payload = {
                 "device_id": DEVICES[i % len(DEVICES)],
+                "session_id": session_id,
                 "status": "ACTIVE",
                 "attack_count": 0,
                 "kem_ciphertext": kem_ciphertext.hex(),
                 "ciphertext": ciphertext.hex(),
                 "nonce": nonce.hex(),
+                "auth_tag": authentication_tag.hex(),
                 "actual_label": actual_label,
             }
 
